@@ -1,0 +1,65 @@
+:root {
+  --primary-color: #3498db;
+  --primary-dark: #2980b9;
+  --primary-light: #5dade2;
+  --text-primary: #2c3e50;
+  --text-secondary: #7f8c8d;
+  --text-disabled: #bdc3c7;
+  --border-color: #dcdde1;
+  --divider-color: #ecf0f1;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f6fa;
+  --bg-hover: #ecf0f1;
+  --bg-active: #dcdde1;
+  --success-color: #27ae60;
+  --warning-color: #f39c12;
+  --danger-color: #e74c3c;
+  --info-color: #3498db;
+  --level-temp: #f39c12;
+  --level-normal: #2c3e50;
+  --level-important: #e74c3c;
+  --level-none: #95a5a6;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.2);
+  --transition-fast: 150ms;
+  --transition-normal: 200ms;
+  --transition-slow: 300ms;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: background var(--transition-fast) ease;
+}
+
+.toolbar-button:hover {
+  background: var(--bg-hover);
+}
+
+.toolbar-button.primary {
+  border-color: var(--primary-color);
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.toolbar-button.primary:hover {
+  background: var(--primary-dark);
+}

@@ -1,0 +1,119 @@
+import { create } from 'zustand';
+
+type Store = {
+  roots: RootItem[];
+  currentRootId: string | null;
+  currentPath: string;
+  tabs: { id: string; title: string; rootId: string; path: string }[];
+  viewMode: ViewMode;
+  displayMode: DisplayMode;
+  files: FileEntry[];
+  timeBuckets: TimeBucket[];
+  selected: string[];
+  messages: MessageItem[];
+  operationStatus: Record<string, OperationStatus>;
+  setRoots: (roots: RootItem[], lastRootId: string | null) => void;
+  setCurrentRootId: (id: string | null) => void;
+  setCurrentPath: (path: string) => void;
+  setFiles: (files: FileEntry[]) => void;
+  setTimeBuckets: (data: TimeBucket[]) => void;
+  setViewMode: (mode: ViewMode) => void;
+  setDisplayMode: (mode: DisplayMode) => void;
+  setSelected: (paths: string[]) => void;
+  toggleSelect: (path: string) => void;
+  clearSelection: () => void;
+  addMessage: (payload: Omit<MessageItem, 'id'>) => void;
+  removeMessage: (id: number) => void;
+  setOperation: (op: OperationStatus) => void;
+  clearOperation: (path: string) => void;
+  addTab: (tab: { rootId: string; path: string; title?: string }) => void;
+  closeTab: (id: string) => void;
+  activateTab: (id: string) => void;
+  updateTab: (id: string, patch: Partial<{ path: string; title: string; rootId: string }>) => void;
+};
+
+export const useStore = create<Store>((set) => ({
+  roots: [],
+  currentRootId: null,
+  currentPath: '.',
+  tabs: [],
+  viewMode: 'physical',
+  displayMode: 'list',
+  files: [],
+  timeBuckets: [],
+  selected: [],
+  messages: [],
+  operationStatus: {},
+
+  setRoots: (roots, lastRootId) =>
+    set(() => ({
+      roots,
+      currentRootId: lastRootId || roots[0]?.id || null
+    })),
+  setCurrentRootId: (id) => set({ currentRootId: id, currentPath: '.' }),
+  setCurrentPath: (path) => set({ currentPath: path }),
+  setFiles: (files) => set({ files }),
+  setTimeBuckets: (data) => set({ timeBuckets: data }),
+  setViewMode: (mode) => set({ viewMode: mode }),
+  setDisplayMode: (mode) => set({ displayMode: mode }),
+  setSelected: (paths) => set({ selected: paths }),
+  toggleSelect: (path) =>
+    set((state) => {
+      const exists = state.selected.includes(path);
+      const next = exists
+        ? state.selected.filter((p) => p !== path)
+        : [...state.selected, path];
+      return { selected: next };
+    }),
+  clearSelection: () => set({ selected: [] }),
+
+  addMessage: (payload) =>
+    set((state) => ({
+      messages: [...state.messages, { ...payload, id: Date.now() }]
+    })),
+  removeMessage: (id) =>
+    set((state) => ({
+      messages: state.messages.filter((m) => m.id !== id)
+    })),
+
+  setOperation: (op) =>
+    set((state) => ({
+      operationStatus: { ...state.operationStatus, [op.path]: op }
+    })),
+  clearOperation: (path) =>
+    set((state) => {
+      const next = { ...state.operationStatus };
+      delete next[path];
+      return { operationStatus: next };
+    }),
+  addTab: (tab) =>
+    set((state) => {
+      const id = `${Date.now()}-${Math.random()}`;
+      const title = tab.title || tab.path || '新标签';
+      return {
+        tabs: [...state.tabs, { id, title, rootId: tab.rootId, path: tab.path }],
+        currentRootId: tab.rootId,
+        currentPath: tab.path
+      };
+    }),
+  closeTab: (id) =>
+    set((state) => {
+      const nextTabs = state.tabs.filter((t) => t.id !== id);
+      const active = nextTabs[nextTabs.length - 1];
+      return {
+        tabs: nextTabs,
+        currentRootId: active ? active.rootId : state.currentRootId,
+        currentPath: active ? active.path : state.currentPath
+      };
+    }),
+  activateTab: (id) =>
+    set((state) => {
+      const target = state.tabs.find((t) => t.id === id);
+      if (!target) return {};
+      return { currentRootId: target.rootId, currentPath: target.path };
+    }),
+  updateTab: (id, patch) =>
+    set((state) => ({
+      tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t))
+    }))
+}));

@@ -1,0 +1,46 @@
+.search-card,
+.batch-card {
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.list-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grid-view {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.file-card {
+  cursor: pointer;
+  transition: transform var(--transition-fast) ease, box-shadow var(--transition-fast) ease;
+}
+
+.file-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.file-card.selected {
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.file-card .name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.file-card .meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.active-root {
+  background: var(--bg-hover);
+}
