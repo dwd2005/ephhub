@@ -310,6 +310,33 @@ function registerIpc() {
     });
   });
 
+  withErrorHandling('fs:import-external', async (_evt, payload) => {
+    const { rootId, relativePath = '.', files = [] } = payload;
+    const root = ensureRoot(rootId);
+    const validSources = [];
+    for (const p of files) {
+      try {
+        const stat = await fs.stat(p);
+        if (stat.isFile() || stat.isDirectory()) validSources.push(p);
+      } catch (err) {
+        // ignore missing
+      }
+    }
+    if (!validSources.length) return [];
+    const planned = validSources.map((src) =>
+      path.join(root.path, relativePath || '.', path.basename(src))
+    );
+    return runWithStatus(planned, 'copy', async () => {
+      const copied = await fileService.importExternalEntries(
+        root.path,
+        relativePath || '.',
+        validSources
+      );
+      await Promise.all(copied.map(({ to }) => watcherManager.handleAdd(root, to, false)));
+      return copied;
+    });
+  });
+
   withErrorHandling('fs:clean-temp', async (_evt, payload) => {
     const { rootId, targets = [], basePath = '.' } = payload;
     const root = ensureRoot(rootId);

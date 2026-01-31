@@ -25,6 +25,8 @@ type Props = {
   onFileAreaMouseDown: React.MouseEventHandler<HTMLDivElement>;
   onFileAreaMouseMove: React.MouseEventHandler<HTMLDivElement>;
   onFileAreaMouseUp: React.MouseEventHandler<HTMLDivElement>;
+  onFileAreaDragOver: React.DragEventHandler<HTMLDivElement>;
+  onFileAreaDrop: React.DragEventHandler<HTMLDivElement>;
   onBlankContextMenu: React.MouseEventHandler<HTMLDivElement>;
   onFileClick: (e: React.MouseEvent, file: FileEntry) => void;
   onFileContextMenu: (e: React.MouseEvent, file: FileEntry) => void;
@@ -51,6 +53,8 @@ const FileDisplay: React.FC<Props> = ({
   onFileAreaMouseDown,
   onFileAreaMouseMove,
   onFileAreaMouseUp,
+  onFileAreaDragOver,
+  onFileAreaDrop,
   onBlankContextMenu,
   onFileClick,
   onFileContextMenu,
@@ -66,6 +70,8 @@ const FileDisplay: React.FC<Props> = ({
       onMouseMove={onFileAreaMouseMove}
       onMouseUp={onFileAreaMouseUp}
       onMouseLeave={onFileAreaMouseUp}
+      onDragOver={onFileAreaDragOver}
+      onDrop={onFileAreaDrop}
       onContextMenu={onBlankContextMenu}
     >
       {selectionBox && (

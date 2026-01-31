@@ -72,6 +72,7 @@ interface Window {
     upload: (payload: { rootId: string; relativePath: string; files: string[] }) => Promise<ApiResult<string[]>>;
     pasteFromClipboard: (payload: { rootId: string; relativePath: string }) => Promise<ApiResult<{ from: string; to: string; finalName: string }[]>>;
     getClipboardFiles: () => Promise<ApiResult<string[]>>;
+    importExternal: (payload: { rootId: string; relativePath: string; files: string[] }) => Promise<ApiResult<{ from: string; to: string; finalName: string }[]>>;
     cleanTemp: (payload: { rootId: string; targets?: string[]; basePath?: string }) => Promise<ApiResult<boolean>>;
     rename: (payload: { rootId: string; relativePath: string; name: string }) => Promise<ApiResult<string>>;
     delete: (payload: { rootId: string; targets: string[] }) => Promise<ApiResult<string[]>>;

@@ -89,6 +89,7 @@ const FileBrowser: React.FC = () => {
   const [openWithApps, setOpenWithApps] = useState<OpenWithApp[]>([]);
   const [openWithLoading, setOpenWithLoading] = useState(false);
   const [newFileTypes, setNewFileTypes] = useState<NewFileType[]>([]);
+  const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [menuState, setMenuState] = useState<{
     visible: boolean;
     position: { x: number; y: number };
@@ -112,6 +113,7 @@ const FileBrowser: React.FC = () => {
       if (payload.rootId === active) {
         refresh();
       }
+      setTreeRefreshKey((v) => v + 1);
     });
     window.api.onOperationStart((payload) => setOperation(payload));
     window.api.onOperationEnd((payload) => clearOperation(payload.path));
@@ -644,6 +646,29 @@ const FileBrowser: React.FC = () => {
     dragStartRef.current = null;
   };
 
+  const handleFileAreaDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleFileAreaDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (!currentRootId) return;
+    const paths = Array.from(e.dataTransfer.files || [])
+      .map((f) => (f as any).path as string)
+      .filter(Boolean);
+    if (!paths.length) return;
+    await handle(
+      window.api.importExternal({
+        rootId: currentRootId,
+        relativePath: currentPath,
+        files: paths
+      })
+    );
+    message.success('已导入');
+    refresh();
+  };
+
   const breadcrumb = useMemo(() => {
     const root = roots.find((r) => r.id === currentRootId);
     const pathParts = currentPath.split(/[\\/]/).filter(Boolean);
@@ -1015,8 +1040,11 @@ const FileBrowser: React.FC = () => {
           <SideBar
             roots={roots}
             currentRootId={currentRootId}
+            currentPath={currentPath}
             onSelectRoot={(id) => setCurrentRootId(id)}
             onAddRoot={openAddRoot}
+            onSelectPath={(p) => setCurrentPath(p)}
+            treeRefreshKey={treeRefreshKey}
           />
         </div>
 
@@ -1054,6 +1082,8 @@ const FileBrowser: React.FC = () => {
             onFileAreaMouseDown={handleFileAreaMouseDown}
             onFileAreaMouseMove={handleFileAreaMouseMove}
             onFileAreaMouseUp={handleFileAreaMouseUp}
+            onFileAreaDragOver={handleFileAreaDragOver}
+            onFileAreaDrop={handleFileAreaDrop}
             onBlankContextMenu={handleBlankContextMenu}
             onFileClick={handleFileClick}
             onFileContextMenu={handleFileContextMenu}

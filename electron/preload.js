@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('api', {
   copy: (payload) => ipcRenderer.invoke('fs:copy', payload),
   pasteFromClipboard: (payload) => ipcRenderer.invoke('fs:paste-clipboard', payload),
   getClipboardFiles: () => ipcRenderer.invoke('clipboard:get-files'),
+  importExternal: (payload) => ipcRenderer.invoke('fs:import-external', payload),
   cleanTemp: (payload) => ipcRenderer.invoke('fs:clean-temp', payload),
   deleteByLevel: (payload) => ipcRenderer.invoke('fs:delete-by-level', payload),
   setLevel: (payload) => ipcRenderer.invoke('fs:set-level', payload),
