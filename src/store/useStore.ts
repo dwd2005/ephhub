@@ -10,6 +10,7 @@ type Store = {
   files: FileEntry[];
   timeBuckets: TimeBucket[];
   selected: string[];
+  clipboard: ClipboardState | null;
   messages: MessageItem[];
   operationStatus: Record<string, OperationStatus>;
   renamingPath: string | null;
@@ -26,6 +27,7 @@ type Store = {
   selectSingle: (path: string) => void;
   toggleSelect: (path: string) => void;
   clearSelection: () => void;
+  setClipboard: (payload: ClipboardState | null) => void;
   setRenamingPath: (path: string | null) => void;
   setSelectionBox: (box: { x: number; y: number; width: number; height: number } | null) => void;
   setIsDragging: (isDragging: boolean) => void;
@@ -49,6 +51,7 @@ export const useStore = create<Store>((set) => ({
   files: [],
   timeBuckets: [],
   selected: [],
+  clipboard: null,
   messages: [],
   operationStatus: {},
   renamingPath: null,
@@ -77,6 +80,7 @@ export const useStore = create<Store>((set) => ({
       return { selected: next };
     }),
   clearSelection: () => set({ selected: [], renamingPath: null }),
+  setClipboard: (payload) => set({ clipboard: payload }),
   setRenamingPath: (path) => set({ renamingPath: path }),
   setSelectionBox: (box) => set({ selectionBox: box }),
   setIsDragging: (isDragging) => set({ isDragging }),

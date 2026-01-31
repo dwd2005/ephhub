@@ -114,6 +114,14 @@ class DatabaseManager {
       [`${rootPath}%`]
     );
   }
+
+  async listByLevel(rootPath, levelTag) {
+    await this.ready;
+    return this.all(
+      `SELECT physical_path, type FROM files WHERE level_tag = ? AND physical_path LIKE ?`,
+      [levelTag, `${rootPath}%`]
+    );
+  }
 }
 
 module.exports = {

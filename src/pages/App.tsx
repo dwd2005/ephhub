@@ -13,8 +13,10 @@ import {
   Tag,
   Tooltip,
   Space,
-  Breadcrumb
+  Breadcrumb,
+  DatePicker
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   AppstoreOutlined,
   ArrowLeftOutlined,
@@ -25,6 +27,8 @@ import {
   FolderAddOutlined,
   FolderOpenOutlined,
   FileOutlined,
+   FileAddOutlined,
+   FileTextOutlined,
   PlusOutlined,
   ReloadOutlined,
   ScissorOutlined,
@@ -35,13 +39,20 @@ import {
   PlusOutlined as PlusTabOutlined,
   CloseOutlined,
   MinusOutlined,
-  BorderOutlined
+  BorderOutlined,
+  EditOutlined,
+  SnippetsOutlined,
+  FieldTimeOutlined
 } from '@ant-design/icons';
+import dayjs, { Dayjs } from 'dayjs';
+import { OpenWithApp } from '@/types/openWith';
+import { NewFileType } from '@/types/newFile';
 import { useStore } from '@/store/useStore';
 import { formatSize, formatTime, levelTagMeta } from '@/utils/format';
 import SideBar from '@/ui/SideBar';
 import MessageHub from '@/ui/MessageHub';
 import TimeView from '@/ui/TimeView';
+import ContextMenu from '@/ui/ContextMenu';
 import './app.css';
 
 const levelTagOptions: { key: LevelTag; label: string }[] = [
@@ -101,7 +112,9 @@ const App: React.FC = () => {
     selectionBox,
     setSelectionBox,
     isDragging,
-    setIsDragging
+    setIsDragging,
+    clipboard,
+    setClipboard
   } = useStore();
   const [activeTab, setActiveTab] = useState<string>('');
 
@@ -115,6 +128,16 @@ const App: React.FC = () => {
   const fileAreaRef = useRef<HTMLDivElement>(null);
   const fileRefs = useRef<Record<string, HTMLDivElement>>({});
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [openWithApps, setOpenWithApps] = useState<OpenWithApp[]>([]);
+  const [openWithLoading, setOpenWithLoading] = useState(false);
+  const [newFileTypes, setNewFileTypes] = useState<NewFileType[]>([]);
+  const [menuState, setMenuState] = useState<{
+    visible: boolean;
+    position: { x: number; y: number };
+    type: 'single-file' | 'multi-file' | 'blank';
+    target?: FileEntry | null;
+  }>({ visible: false, position: { x: 0, y: 0 }, type: 'blank', target: null });
+  const closeContextMenu = () => setMenuState((prev) => ({ ...prev, visible: false }));
 
   const deriveTitle = (rootId: string | null, path: string) => {
     const root = roots.find((r) => r.id === rootId);
@@ -158,6 +181,51 @@ const App: React.FC = () => {
     const title = deriveTitle(currentRootId, currentPath);
     updateTab(activeTab, { path: currentPath, rootId: currentRootId || undefined, title });
   }, [currentPath, currentRootId, activeTab]);
+
+  useEffect(() => {
+    const handleGlobalClick = () => closeContextMenu();
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeContextMenu();
+      }
+    };
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('keydown', handleEsc);
+    return () => {
+      window.removeEventListener('click', handleGlobalClick);
+      window.removeEventListener('keydown', handleEsc);
+    };
+  }, []);
+
+  useEffect(() => {
+    const fetchOpenWith = async () => {
+      if (!menuState.visible || menuState.type !== 'single-file' || !menuState.target) return;
+      setOpenWithLoading(true);
+      try {
+        const apps = await handle(
+          window.api.getOpenWithApps({ filePath: menuState.target.fullPath })
+        );
+        setOpenWithApps(apps);
+      } catch (err) {
+        setOpenWithApps([]);
+      } finally {
+        setOpenWithLoading(false);
+      }
+    };
+    fetchOpenWith();
+  }, [menuState.visible, menuState.type, menuState.target]);
+
+  useEffect(() => {
+    const loadNewFileTypes = async () => {
+      try {
+        const list = await handle(window.api.getNewFileTypes());
+        setNewFileTypes(list);
+      } catch (err) {
+        setNewFileTypes([]);
+      }
+    };
+    loadNewFileTypes();
+  }, []);
 
   const bootstrap = async () => {
     const config = await handle(window.api.getConfig());
@@ -270,10 +338,122 @@ const App: React.FC = () => {
     });
   };
 
+  const handleCopyOrCut = (mode: 'copy' | 'cut', paths?: string[]) => {
+    if (!currentRootId) {
+      message.info('请先选择根目录');
+      return;
+    }
+    const targets = paths ?? selected;
+    if (!targets.length) return message.info('请先选择文件');
+    setClipboard({ mode, rootId: currentRootId, paths: targets });
+    closeContextMenu();
+    message.success(mode === 'copy' ? '已加入复制队列' : '已加入剪切队列');
+  };
+
+  const handlePaste = async () => {
+    closeContextMenu();
+    if (!clipboard) return message.info('剪贴板为空');
+    if (!currentRootId) return message.info('请先选择根目录');
+    if (clipboard.rootId !== currentRootId) {
+      return message.warning('只能在同一根目录中粘贴');
+    }
+    try {
+      if (clipboard.mode === 'copy') {
+        await handle(
+          window.api.copy({
+            rootId: currentRootId,
+            targets: clipboard.paths,
+            destination: currentPath
+          })
+        );
+        message.success('粘贴完成');
+      } else {
+        await handle(
+          window.api.move({
+            rootId: currentRootId,
+            targets: clipboard.paths,
+            destination: currentPath
+          })
+        );
+        setClipboard(null);
+        message.success('移动完成');
+      }
+      clearSelection();
+      refresh();
+    } catch (err) {}
+  };
+
+  const handleFileContextMenu = (e: React.MouseEvent, file: FileEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const alreadySelected = selected.includes(file.relativePath);
+    if (!alreadySelected) {
+      selectSingle(file.relativePath);
+    }
+    const selectionSize = alreadySelected ? selected.length : 1;
+    setMenuState({
+      visible: true,
+      position: { x: e.clientX, y: e.clientY },
+      type: selectionSize > 1 ? 'multi-file' : 'single-file',
+      target: file
+    });
+  };
+
+  const handleBlankContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearSelection();
+    setMenuState({
+      visible: true,
+      position: { x: e.clientX, y: e.clientY },
+      type: 'blank',
+      target: null
+    });
+  };
+
+  const promptNewFile = (options: { ext: string; placeholder: string; templatePath?: string | null }) => {
+    closeContextMenu();
+    let inputRef: any = null;
+    Modal.confirm({
+      title: `新建${options.placeholder}`,
+      content: (
+        <Input
+          defaultValue={`新建${options.placeholder}${options.ext}`}
+          ref={(ref) => (inputRef = ref)}
+          placeholder="请输入文件名"
+        />
+      ),
+      onOk: async () => {
+        const value = inputRef?.input?.value?.trim();
+        if (!value) return Promise.reject();
+        const finalName = value.endsWith(options.ext) ? value : `${value}${options.ext}`;
+        await handle(
+          window.api.createFile({
+            rootId: currentRootId!,
+            relativePath: currentPath,
+            name: finalName,
+            content: '',
+            templatePath: options.templatePath || undefined
+          })
+        );
+        refresh();
+      }
+    });
+  };
+
   const handleSetLevel = (level: LevelTag) => {
     if (!selected.length) return message.info('请选择文件');
+    handleSetLevelForPaths(level, selected);
+  };
+
+  const handleSetLevelForPaths = (level: LevelTag, targets: string[]) => {
+    if (!currentRootId) {
+      message.info('请先选择根目录');
+      return;
+    }
+    if (!targets.length) return;
     window.api
-      .setLevel({ rootId: currentRootId!, targets: selected, levelTag: level })
+      .setLevel({ rootId: currentRootId!, targets, levelTag: level })
       .then((res) => {
         if (!res.ok) {
           message.error(res.message || '操作失败');
@@ -289,10 +469,51 @@ const App: React.FC = () => {
   };
 
   const clearTemp = async () => {
-    const tempPaths = files.filter((f) => f.levelTag === 'temp').map((f) => f.relativePath);
-    if (!tempPaths.length) return message.info('没有临时文件');
-    await handle(window.api.setLevel({ rootId: currentRootId!, targets: tempPaths, levelTag: null }));
+    if (!currentRootId) return;
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: '清除临时级别文件',
+        content: '将删除所有标记为“临时”的文件/文件夹并移入回收站，确认继续？',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      });
+    });
+    if (!confirmed) return;
+    await handle(window.api.deleteByLevel({ rootId: currentRootId, levelTag: 'temp' }));
     refresh();
+  };
+
+  const handleSetCustomTime = (targets: string[]) => {
+    if (!currentRootId) {
+      message.info('请先选择根目录');
+      return;
+    }
+    if (!targets.length) return;
+    let picked: Dayjs | null = dayjs();
+    Modal.confirm({
+      title: '设置自定义时间',
+      content: (
+        <DatePicker
+          showTime
+          defaultValue={picked}
+          style={{ width: '100%' }}
+          onChange={(val) => {
+            picked = val;
+          }}
+        />
+      ),
+      onOk: async () => {
+        if (!picked) return Promise.reject();
+        await handle(
+          window.api.setCustomTime({
+            rootId: currentRootId!,
+            targets,
+            customTime: picked.toISOString()
+          })
+        );
+        refresh();
+      }
+    });
   };
 
   const onOpen = async (file: FileEntry) => {
@@ -465,6 +686,265 @@ const App: React.FC = () => {
   }, [currentPath, currentRootId, roots]);
 
   const operationsBusy = Object.keys(operationStatus).length > 0;
+
+  const openWithItems: MenuProps['items'] = menuState.target
+    ? [
+        {
+          key: 'open-default',
+          label: '默认程序',
+          onClick: () => {
+            closeContextMenu();
+            onOpen(menuState.target!);
+          }
+        },
+        ...(openWithLoading
+          ? [
+              {
+                key: 'open-loading',
+                label: '正在读取关联程序...',
+                disabled: true
+              }
+            ]
+          : openWithApps.length
+            ? openWithApps.map((app) => {
+                const iconPath = app.iconPath;
+                const isDllIcon = iconPath && iconPath.includes('.dll');
+                const isValidIcon = iconPath && !isDllIcon;
+                return {
+                  key: app.name,
+                  icon: isValidIcon ? (
+                    <img
+                      src={`file:///${iconPath.replace(/\\/g, '/')}`}
+                      alt=""
+                      style={{ width: 16, height: 16, objectFit: 'contain' }}
+                      onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
+                    />
+                  ) : (
+                    <AppstoreOutlined />
+                  ),
+                  label: app.displayName || app.name,
+                  onClick: () => {
+                    closeContextMenu();
+                    return handle(
+                      window.api.openWithApp({
+                        command: app.command,
+                        filePath: menuState.target!.fullPath
+                      })
+                    );
+                  }
+                };
+              })
+            : [
+                {
+                  key: 'open-none',
+                  label: '未检测到关联程序',
+                  disabled: true
+                }
+              ]),
+        { type: 'divider' as const },
+        {
+          key: 'open-with-dialog',
+          label: '选择其他应用',
+          icon: <AppstoreOutlined />,
+          onClick: async () => {
+            closeContextMenu();
+            return handle(
+              window.api.openWithDialog({
+                filePath: menuState.target!.fullPath
+              })
+            );
+          }
+        },
+        { type: 'divider' as const },
+        {
+          key: 'reveal',
+          label: '在资源管理器中显示',
+          onClick: () => {
+            closeContextMenu();
+            return handle(
+              window.api.revealItem({
+                rootId: currentRootId!,
+                relativePath: menuState.target!.relativePath
+              })
+            );
+          }
+        }
+      ]
+    : [];
+
+  const newMenuItems: MenuProps['items'] = [
+    {
+      key: 'new-folder',
+      label: '文件夹',
+      icon: <FolderAddOutlined />,
+      onClick: () => {
+        closeContextMenu();
+        handleNewFolder();
+      }
+    },
+    ...(newFileTypes.length
+      ? newFileTypes.map((type) => ({
+          key: `new-${type.extension}`,
+          label: type.name || `新建${type.extension}`,
+          icon: <FileTextOutlined />,
+          onClick: () =>
+            promptNewFile({
+              ext: type.extension,
+              placeholder: type.name || type.extension,
+              templatePath: type.templatePath || undefined
+            })
+        }))
+      : [
+          {
+            key: 'new-text',
+            label: '文本文档',
+            icon: <FileTextOutlined />,
+            onClick: () =>
+              promptNewFile({
+                ext: '.txt',
+                placeholder: '文本文档'
+              })
+          }
+        ])
+  ];
+
+  const menuItems: MenuProps['items'] = (() => {
+    const pasteItem = {
+      key: 'paste',
+      label: '粘贴',
+      icon: <SnippetsOutlined />,
+      disabled: !clipboard || !currentRootId || clipboard.rootId !== currentRootId,
+      onClick: handlePaste
+    };
+
+    const timeItem = (paths: string[]) => ({
+      key: 'custom-time',
+      label: '设置时间',
+      icon: <FieldTimeOutlined />,
+      onClick: () => handleSetCustomTime(paths)
+    });
+
+    const levelMenu = (paths: string[]) => ({
+      key: 'level',
+      label: '设置等级',
+      icon: <TagOutlined />,
+      children: [
+        {
+          key: 'level-important',
+          label: '重要',
+          onClick: () => handleSetLevelForPaths('important', paths)
+        },
+        {
+          key: 'level-normal',
+          label: '常规',
+          onClick: () => handleSetLevelForPaths('normal', paths)
+        },
+        {
+          key: 'level-temp',
+          label: '临时',
+          onClick: () => handleSetLevelForPaths('temp', paths)
+        },
+        {
+          key: 'level-clear',
+          label: '清除等级',
+          onClick: () => handleSetLevelForPaths(null, paths)
+        }
+      ]
+    });
+
+    if (menuState.type === 'single-file' && menuState.target) {
+      return [
+        {
+          key: 'open',
+          label: '打开',
+          icon: <FolderOpenOutlined />,
+          onClick: () => {
+            closeContextMenu();
+            onOpen(menuState.target!);
+          }
+        },
+        { type: 'divider' as const },
+        {
+          key: 'cut',
+          label: '剪切',
+          icon: <ScissorOutlined />,
+          onClick: () => handleCopyOrCut('cut', [menuState.target!.relativePath])
+        },
+        {
+          key: 'copy',
+          label: '复制',
+          icon: <CopyOutlined />,
+          onClick: () => handleCopyOrCut('copy', [menuState.target!.relativePath])
+        },
+        pasteItem,
+        { type: 'divider' as const },
+        {
+          key: 'rename',
+          label: '重命名',
+          icon: <EditOutlined />,
+          onClick: () => {
+            closeContextMenu();
+            setRenamingPath(menuState.target!.relativePath);
+          }
+        },
+        timeItem([menuState.target.relativePath]),
+        levelMenu([menuState.target.relativePath]),
+        { type: 'divider' as const },
+        {
+          key: 'open-with',
+          label: '打开方式',
+          icon: <AppstoreOutlined />,
+          children: openWithItems.length
+            ? openWithItems
+            : [
+                {
+                  key: 'open-default-only',
+                  label: '默认程序',
+                  onClick: () => {
+                    closeContextMenu();
+                    onOpen(menuState.target!);
+                  }
+                }
+              ]
+        }
+      ];
+    }
+
+    if (menuState.type === 'multi-file') {
+      return [
+        {
+          key: 'cut',
+          label: '剪切',
+          icon: <ScissorOutlined />,
+          onClick: () => handleCopyOrCut('cut')
+        },
+        {
+          key: 'copy',
+          label: '复制',
+          icon: <CopyOutlined />,
+          onClick: () => handleCopyOrCut('copy')
+        },
+        timeItem(selected),
+        levelMenu(selected)
+      ];
+    }
+
+    if (menuState.type === 'blank') {
+      return [
+        pasteItem,
+        {
+          key: 'new',
+          label: '新建',
+          icon: <FileAddOutlined />,
+          children: newMenuItems
+        }
+      ];
+    }
+
+    return [];
+  })();
 
   const tabItems = tabs.map((tab) => ({
     key: tab.id,
@@ -684,6 +1164,7 @@ const App: React.FC = () => {
             onMouseMove={handleFileAreaMouseMove}
             onMouseUp={handleFileAreaMouseUp}
             onMouseLeave={handleFileAreaMouseUp}
+            onContextMenu={handleBlankContextMenu}
           >
             {selectionBox && (
               <div
@@ -736,6 +1217,7 @@ const App: React.FC = () => {
                         className={`list-item ${selected.includes(file.relativePath) ? 'selected' : ''}`}
                         onClick={(e) => handleFileClick(e, file)}
                         onDoubleClick={() => onOpen(file)}
+                        onContextMenu={(e) => handleFileContextMenu(e, file)}
                       >
                         <div className="list-item-name">
                           <Flex align="center" gap={8}>
@@ -786,6 +1268,7 @@ const App: React.FC = () => {
                       }`}
                       onClick={(e) => handleFileClick(e, file)}
                       onDoubleClick={() => onOpen(file)}
+                      onContextMenu={(e) => handleFileContextMenu(e, file)}
                       extra={
                         <Tag color={levelTagMeta(file.levelTag).color}>
                           {levelTagMeta(file.levelTag).label}
@@ -833,6 +1316,7 @@ const App: React.FC = () => {
         </div>
       </div>
 
+      <ContextMenu visible={menuState.visible} position={menuState.position} items={menuItems} onClose={closeContextMenu} />
       <MessageHub />
     </div>
   );

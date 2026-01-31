@@ -104,6 +104,25 @@ async function createFolder(rootPath, relativePath, name) {
   return dest;
 }
 
+async function createFile(rootPath, relativePath, name, templatePath = null, content = '') {
+  const target = ensureInsideRoot(rootPath, path.join(rootPath, relativePath, name));
+  await fs.ensureDir(path.dirname(target));
+  if (await fs.pathExists(target)) {
+    throw new Error('Target already exists');
+  }
+
+  if (templatePath) {
+    const resolvedTemplate = path.resolve(templatePath);
+    if (!(await fs.pathExists(resolvedTemplate))) {
+      throw new Error('Template file not found');
+    }
+    await fs.copy(resolvedTemplate, target, { overwrite: false, errorOnExist: true });
+  } else {
+    await fs.outputFile(target, content);
+  }
+  return target;
+}
+
 async function uploadFiles(rootPath, relativePath, filePaths) {
   const created = [];
   for (const file of filePaths) {
@@ -168,5 +187,6 @@ module.exports = {
   moveEntries,
   copyEntries,
   toRelative,
-  scanRoot
+  scanRoot,
+  createFile
 };

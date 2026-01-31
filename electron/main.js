@@ -6,6 +6,8 @@ const { readConfig, writeConfig } = require('./config');
 const { DatabaseManager } = require('./db');
 const { WatcherManager } = require('./watchers');
 const fileService = require('./fileService');
+const { getOpenWithApps, getNewFileTypes } = require('./registry');
+const { exec } = require('child_process');
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 let mainWindow;
@@ -175,6 +177,14 @@ function registerIpc() {
     return dest;
   });
 
+  withErrorHandling('fs:create-file', async (_evt, payload) => {
+    const { rootId, relativePath, name, templatePath, content } = payload;
+    const root = ensureRoot(rootId);
+    const dest = await fileService.createFile(root.path, relativePath, name, templatePath, content);
+    await watcherManager.handleAdd(root, dest, false);
+    return dest;
+  });
+
   withErrorHandling('fs:upload', async (_evt, payload) => {
     const { rootId, relativePath, files } = payload;
     const root = ensureRoot(rootId);
@@ -246,6 +256,22 @@ function registerIpc() {
     });
   });
 
+  withErrorHandling('fs:delete-by-level', async (_evt, payload) => {
+    const { rootId, levelTag } = payload;
+    const root = ensureRoot(rootId);
+    const rows = await db.listByLevel(root.path, levelTag);
+    const rels = rows.map((r) => fileService.toRelative(root.path, r.physical_path));
+    const absTargets = rows.map((r) => r.physical_path);
+    return runWithStatus(absTargets, 'delete', async () => {
+      const deleted = await fileService.deleteEntries(root.path, rels);
+      await db.deleteRecords(absTargets);
+      for (const rel of rels) {
+        await watcherManager.handleDelete(root, path.join(root.path, rel));
+      }
+      return deleted;
+    });
+  });
+
   withErrorHandling('fs:set-level', async (_evt, payload) => {
     const { rootId, targets, levelTag } = payload;
     const root = ensureRoot(rootId);
@@ -260,6 +286,57 @@ function registerIpc() {
     const abs = targets.map((rel) => path.join(root.path, rel));
     await db.setCustomTime(abs, customTime);
     return true;
+  });
+
+  withErrorHandling('fs:get-open-with-apps', async (_evt, payload) => {
+    const { filePath } = payload;
+    const ext = path.extname(filePath) || '';
+    if (!ext) return [];
+    return getOpenWithApps(ext);
+  });
+
+  withErrorHandling('fs:get-new-file-types', async () => {
+    return getNewFileTypes();
+  });
+
+  withErrorHandling('fs:open-with-app', async (_evt, payload) => {
+    const { command, filePath } = payload;
+    if (!command || !filePath) return false;
+    let finalCmd = command;
+    if (/%1|%l|%L/i.test(finalCmd)) {
+      finalCmd = finalCmd.replace(/%1|%l|%L/gi, `"${filePath}"`);
+    } else {
+      finalCmd = `${finalCmd} "${filePath}"`;
+    }
+    return new Promise((resolve, reject) => {
+      exec(finalCmd, { windowsHide: true }, (err) => {
+        if (err) return reject(err);
+        resolve(true);
+      });
+    });
+  });
+
+  withErrorHandling('fs:open-with-dialog', async (_evt, payload) => {
+    const { filePath } = payload;
+    if (!filePath) return false;
+    
+    // 使用 PowerShell 调用 Windows 的"打开方式"对话框
+    const psCmd = `powershell -Command "& {Add-Type -AssemblyName System.Windows.Forms; $ofd = New-Object System.Windows.Forms.OpenFileDialog; $ofd.Filter = '所有文件|*.*'; $ofd.FileName = '${filePath.replace(/'/g, "''")}'; $ofd.ShowDialog()}"`;
+    
+    return new Promise((resolve, reject) => {
+      exec(psCmd, (err, stdout, stderr) => {
+        if (err) {
+          // 如果 PowerShell 失败，尝试使用 rundll32
+          const cmd = `cmd.exe /c start "" rundll32.exe shell32.dll,OpenAs_RunDLL "${filePath}"`;
+          exec(cmd, (err2) => {
+            if (err2) return reject(err2);
+            resolve(true);
+          });
+        } else {
+          resolve(true);
+        }
+      });
+    });
   });
 
   withErrorHandling('fs:open', async (_evt, payload) => {
