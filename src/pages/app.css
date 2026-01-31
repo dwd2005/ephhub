@@ -4,16 +4,177 @@
   box-shadow: var(--shadow-sm);
 }
 
+.tab-bar {
+  flex: 1;
+  overflow: hidden;
+}
+
+.tab-bar .ant-tabs {
+  height: 100%;
+}
+
+.tab-bar .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.tab-bar .ant-tabs-tab {
+  padding: 8px 16px;
+  width: 240px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.tab-bar .ant-tabs-tab[data-node-key="add-tab"] {
+  width: auto;
+  flex: none;
+  padding: 8px 12px;
+}
+
+.tab-bar .ant-tabs-tab-btn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-bar .ant-tabs-close-x {
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.tab-bar .ant-tabs-nav-operations {
+  margin-left: 8px;
+}
+
+.tab-bar .ant-tabs-nav-more {
+  padding: 8px;
+}
+
+.path-bar {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.path-bar:hover {
+  border-color: var(--primary-color);
+}
+
+.path-bar-input {
+  width: 100%;
+}
+
+.path-bar .ant-breadcrumb {
+  flex: 1;
+  margin: 0;
+}
+
+.path-bar .ant-breadcrumb-item {
+  cursor: pointer;
+}
+
+.path-bar .ant-breadcrumb-item:hover {
+  color: var(--primary-color);
+}
+
+.path-bar-container {
+  width: 60%;
+  flex-shrink: 0;
+}
+
+.navigation-buttons {
+  flex-shrink: 0;
+}
+
 .list-view {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
+}
+
+.list-header {
+  display: flex;
+  background: var(--bg-hover);
+  padding: 8px 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.list-header-name {
+  flex: 1;
+  min-width: 200px;
+}
+
+.list-header-date {
+  width: 160px;
+  flex-shrink: 0;
+}
+
+.list-header-level {
+  width: 120px;
+  flex-shrink: 0;
+}
+
+.list-item {
+  display: flex;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color var(--transition-fast) ease;
+  border-bottom: 1px solid var(--border-color);
+  align-items: center;
+}
+
+.list-item:hover {
+  background: var(--bg-hover);
+}
+
+.list-item.selected {
+  background: var(--primary-color-light);
+  border-color: var(--primary-color);
+}
+
+.list-item-name {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+}
+
+.list-item-date {
+  width: 160px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.list-item-level {
+  width: 120px;
+  flex-shrink: 0;
 }
 
 .grid-view {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
+  position: relative;
+}
+
+.list-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
 }
 
 .file-card {
@@ -43,4 +204,22 @@
 
 .active-root {
   background: var(--bg-hover);
+}
+
+.file-display {
+  position: relative;
+  user-select: none;
+}
+
+.file-display .list-item-name span,
+.file-display .file-card .name {
+  cursor: text;
+}
+
+.file-display .list-item-name span:hover,
+.file-display .file-card .name:hover {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+  padding: 0 2px;
+  margin: 0 -2px;
 }

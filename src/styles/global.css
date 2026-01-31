@@ -57,13 +57,17 @@
 }
 
 .middle-bar {
-  padding: 8px 12px;
+  padding: 8px 5px;
   background: var(--bg-secondary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .search-card {
   background: var(--bg-primary);
   box-shadow: var(--shadow-sm);
+  flex: 1;
 }
 
 .path-bar {

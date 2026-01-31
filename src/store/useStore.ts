@@ -12,6 +12,9 @@ type Store = {
   selected: string[];
   messages: MessageItem[];
   operationStatus: Record<string, OperationStatus>;
+  renamingPath: string | null;
+  selectionBox: { x: number; y: number; width: number; height: number } | null;
+  isDragging: boolean;
   setRoots: (roots: RootItem[], lastRootId: string | null) => void;
   setCurrentRootId: (id: string | null) => void;
   setCurrentPath: (path: string) => void;
@@ -20,8 +23,12 @@ type Store = {
   setViewMode: (mode: ViewMode) => void;
   setDisplayMode: (mode: DisplayMode) => void;
   setSelected: (paths: string[]) => void;
+  selectSingle: (path: string) => void;
   toggleSelect: (path: string) => void;
   clearSelection: () => void;
+  setRenamingPath: (path: string | null) => void;
+  setSelectionBox: (box: { x: number; y: number; width: number; height: number } | null) => void;
+  setIsDragging: (isDragging: boolean) => void;
   addMessage: (payload: Omit<MessageItem, 'id'>) => void;
   removeMessage: (id: number) => void;
   setOperation: (op: OperationStatus) => void;
@@ -44,6 +51,9 @@ export const useStore = create<Store>((set) => ({
   selected: [],
   messages: [],
   operationStatus: {},
+  renamingPath: null,
+  selectionBox: null,
+  isDragging: false,
 
   setRoots: (roots, lastRootId) =>
     set(() => ({
@@ -57,6 +67,7 @@ export const useStore = create<Store>((set) => ({
   setViewMode: (mode) => set({ viewMode: mode }),
   setDisplayMode: (mode) => set({ displayMode: mode }),
   setSelected: (paths) => set({ selected: paths }),
+  selectSingle: (path) => set({ selected: [path] }),
   toggleSelect: (path) =>
     set((state) => {
       const exists = state.selected.includes(path);
@@ -65,7 +76,10 @@ export const useStore = create<Store>((set) => ({
         : [...state.selected, path];
       return { selected: next };
     }),
-  clearSelection: () => set({ selected: [] }),
+  clearSelection: () => set({ selected: [], renamingPath: null }),
+  setRenamingPath: (path) => set({ renamingPath: path }),
+  setSelectionBox: (box) => set({ selectionBox: box }),
+  setIsDragging: (isDragging) => set({ isDragging }),
 
   addMessage: (payload) =>
     set((state) => ({

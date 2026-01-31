@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import {
   App as AntApp,
   Button,
@@ -12,10 +12,12 @@ import {
   Tabs,
   Tag,
   Tooltip,
-  Space
+  Space,
+  Breadcrumb
 } from 'antd';
 import {
   AppstoreOutlined,
+  ArrowLeftOutlined,
   ClockCircleOutlined,
   CloudUploadOutlined,
   CopyOutlined,
@@ -81,6 +83,7 @@ const App: React.FC = () => {
     setFiles,
     selected,
     setSelected,
+    selectSingle,
     toggleSelect,
     clearSelection,
     addMessage,
@@ -92,7 +95,13 @@ const App: React.FC = () => {
     tabs,
     addTab,
     closeTab,
-    updateTab
+    updateTab,
+    renamingPath,
+    setRenamingPath,
+    selectionBox,
+    setSelectionBox,
+    isDragging,
+    setIsDragging
   } = useStore();
   const [activeTab, setActiveTab] = useState<string>('');
 
@@ -100,6 +109,12 @@ const App: React.FC = () => {
   const { handle } = useApiHelpers();
   const [loading, setLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [pathInputMode, setPathInputMode] = useState(false);
+  const [pathInputValue, setPathInputValue] = useState('');
+  const pathInputRef = useRef<any>(null);
+  const fileAreaRef = useRef<HTMLDivElement>(null);
+  const fileRefs = useRef<Record<string, HTMLDivElement>>({});
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const deriveTitle = (rootId: string | null, path: string) => {
     const root = roots.find((r) => r.id === rootId);
@@ -288,7 +303,167 @@ const App: React.FC = () => {
     }
   };
 
-  const breadcrumb = useMemo(() => currentPath.split(/[\/]/).filter(Boolean), [currentPath]);
+  const handleBreadcrumbClick = (path: string) => {
+    setCurrentPath(path);
+  };
+
+  const handlePathInputSubmit = () => {
+    const inputPath = pathInputValue.trim();
+    if (!inputPath) {
+      setPathInputMode(false);
+      return;
+    }
+
+    const root = roots.find((r) => r.id === currentRootId);
+    if (!root) {
+      setPathInputMode(false);
+      return;
+    }
+
+    let relativePath = inputPath;
+    if (inputPath.startsWith(root.path)) {
+      relativePath = inputPath.slice(root.path.length).replace(/^[\/\\]/, '');
+      if (relativePath === '') {
+        relativePath = '.';
+      }
+    }
+
+    setCurrentPath(relativePath);
+    setPathInputMode(false);
+  };
+
+  const handlePathInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handlePathInputSubmit();
+    } else if (e.key === 'Escape') {
+      setPathInputMode(false);
+    }
+  };
+
+  const handlePathInputFocus = () => {
+    const root = roots.find((r) => r.id === currentRootId);
+    const fullPath = currentPath === '.' ? root?.path || '' : `${root?.path || ''}/${currentPath}`;
+    setPathInputValue(fullPath);
+    setTimeout(() => pathInputRef.current?.select(), 0);
+  };
+
+  const handleGoBack = () => {
+    if (currentPath === '.' || !currentPath) return;
+    const pathParts = currentPath.split(/[\/]/).filter(Boolean);
+    if (pathParts.length === 0) {
+      setCurrentPath('.');
+    } else {
+      const parentPath = pathParts.slice(0, -1).join('/');
+      setCurrentPath(parentPath || '.');
+    }
+  };
+
+  const handleFileClick = (e: React.MouseEvent, file: FileEntry) => {
+    e.stopPropagation();
+    if (renamingPath) {
+      setRenamingPath(null);
+      return;
+    }
+    if (selected.length === 0 || !selected.includes(file.relativePath)) {
+      selectSingle(file.relativePath);
+    }
+  };
+
+  const handleFileNameClick = (e: React.MouseEvent, file: FileEntry) => {
+    e.stopPropagation();
+    if (selected.includes(file.relativePath)) {
+      setRenamingPath(file.relativePath);
+    } else {
+      selectSingle(file.relativePath);
+    }
+  };
+
+  const handleRenameSubmit = async (file: FileEntry, newName: string) => {
+    const trimmedName = newName.trim();
+    if (!trimmedName || trimmedName === file.name) {
+      setRenamingPath(null);
+      return;
+    }
+    try {
+      await handle(
+        window.api.rename({
+          rootId: currentRootId!,
+          relativePath: file.relativePath,
+          name: trimmedName
+        })
+      );
+      refresh();
+    } catch (err) {
+    } finally {
+      setRenamingPath(null);
+    }
+  };
+
+  const handleFileAreaMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('.file-card') || target.closest('.list-item')) return;
+    clearSelection();
+    const rect = fileAreaRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragStartRef.current = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    };
+    setIsDragging(true);
+  };
+
+  const handleFileAreaMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || !dragStartRef.current) return;
+    const rect = fileAreaRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const currentX = e.clientX - rect.left;
+    const currentY = e.clientY - rect.top;
+    const startX = dragStartRef.current.x;
+    const startY = dragStartRef.current.y;
+    const x = Math.min(startX, currentX);
+    const y = Math.min(startY, currentY);
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+    setSelectionBox({ x, y, width, height });
+    const selectedPaths: string[] = [];
+    Object.entries(fileRefs.current).forEach(([path, el]) => {
+      const elRect = el.getBoundingClientRect();
+      const elX = elRect.left - rect.left;
+      const elY = elRect.top - rect.top;
+      const elRight = elX + elRect.width;
+      const elBottom = elY + elRect.height;
+      if (elX < x + width && elRight > x && elY < y + height && elBottom > y) {
+        selectedPaths.push(path);
+      }
+    });
+    setSelected(selectedPaths);
+  };
+
+  const handleFileAreaMouseUp = () => {
+    setIsDragging(false);
+    setSelectionBox(null);
+    dragStartRef.current = null;
+  };
+
+  const breadcrumb = useMemo(() => {
+    const root = roots.find((r) => r.id === currentRootId);
+    const pathParts = currentPath.split(/[\/]/).filter(Boolean);
+    const items: Array<{ title: string; path: string }> = [];
+    
+    if (root) {
+      items.push({ title: root.name, path: '.' });
+    }
+    
+    let currentPathAccum = '';
+    pathParts.forEach((part, index) => {
+      currentPathAccum = currentPathAccum ? `${currentPathAccum}/${part}` : part;
+      items.push({ title: part, path: currentPathAccum });
+    });
+    
+    return items;
+  }, [currentPath, currentRootId, roots]);
+
   const operationsBusy = Object.keys(operationStatus).length > 0;
 
   const tabItems = tabs.map((tab) => ({
@@ -358,13 +533,54 @@ const App: React.FC = () => {
 
       <div className="middle-bar">
         <Card size="small" className="search-card" variant="borderless" style={{ position: 'relative', zIndex: 999 }} >
-          <Flex align="center" gap={8}>
-            <Input
-              prefix={<FolderOpenOutlined />}
-              value={breadcrumb.join('/') || '.'}
-              readOnly
-              className="path-bar"
-            />
+          <Flex align="center" gap={8} style={{ flex: 1 }}>
+            <Space className="navigation-buttons">
+              <Tooltip title="返回上一级">
+                <Button icon={<ArrowLeftOutlined />} onClick={handleGoBack} />
+              </Tooltip>
+              <Tooltip title="刷新">
+                <Button icon={<ReloadOutlined />} onClick={refresh} />
+              </Tooltip>
+            </Space>
+            <div className="path-bar-container">
+              {pathInputMode ? (
+                <Input
+                  ref={pathInputRef}
+                  value={pathInputValue}
+                  onChange={(e) => setPathInputValue(e.target.value)}
+                  onBlur={handlePathInputSubmit}
+                  onKeyDown={handlePathInputKeyDown}
+                  onFocus={handlePathInputFocus}
+                  prefix={<FolderOpenOutlined />}
+                  className="path-bar-input"
+                  autoFocus
+                />
+              ) : (
+                <div 
+                  className="path-bar" 
+                  onClick={() => setPathInputMode(true)}
+                >
+                  <Flex align="center" gap={8}>
+                    <FolderOpenOutlined />
+                    <Breadcrumb
+                      items={breadcrumb.map((item, index) => ({
+                        title: (
+                          <span 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleBreadcrumbClick(item.path);
+                            }}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {item.title}
+                          </span>
+                        )
+                      }))}
+                    />
+                  </Flex>
+                </div>
+              )}
+            </div>
             <Input
               prefix={<SearchOutlined />}
               placeholder="搜索（UI 待接入）"
@@ -407,9 +623,6 @@ const App: React.FC = () => {
                 </Button>
                 <Button icon={<CloudUploadOutlined />} onClick={handleUpload}>
                   上传
-                </Button>
-                <Button onClick={refresh} icon={<ReloadOutlined />}>
-                  刷新
                 </Button>
               </Space>
               <Space>
@@ -464,7 +677,30 @@ const App: React.FC = () => {
             </Flex>
           </Card>
 
-          <div className="file-display">
+          <div 
+            className="file-display"
+            ref={fileAreaRef}
+            onMouseDown={handleFileAreaMouseDown}
+            onMouseMove={handleFileAreaMouseMove}
+            onMouseUp={handleFileAreaMouseUp}
+            onMouseLeave={handleFileAreaMouseUp}
+          >
+            {selectionBox && (
+              <div
+                className="selection-box"
+                style={{
+                  position: 'absolute',
+                  left: selectionBox.x,
+                  top: selectionBox.y,
+                  width: selectionBox.width,
+                  height: selectionBox.height,
+                  border: '1px dashed #1890ff',
+                  backgroundColor: 'rgba(24, 144, 255, 0.1)',
+                  pointerEvents: 'none',
+                  zIndex: 1000
+                }}
+              />
+            )}
             {loading ? (
               <Flex style={{ height: '100%' }} align="center" justify="center">
                 <Spin />
@@ -485,15 +721,70 @@ const App: React.FC = () => {
               <div className={displayMode === 'list' ? 'list-view' : 'grid-view'}>
                 {files.length === 0 ? (
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文件" />
+                ) : displayMode === 'list' ? (
+                  <>
+                    <div className="list-header">
+                      <div className="list-header-name">名称</div>
+                      <div className="list-header-date">修改日期</div>
+                      <div className="list-header-date">文件日期</div>
+                      <div className="list-header-level">等级</div>
+                    </div>
+                    {files.map((file) => (
+                      <div
+                        key={file.relativePath}
+                        ref={(el) => { if (el) fileRefs.current[file.relativePath] = el; }}
+                        className={`list-item ${selected.includes(file.relativePath) ? 'selected' : ''}`}
+                        onClick={(e) => handleFileClick(e, file)}
+                        onDoubleClick={() => onOpen(file)}
+                      >
+                        <div className="list-item-name">
+                          <Flex align="center" gap={8}>
+                            {file.isDirectory ? <FolderOpenOutlined /> : <FileIcon ext={file.ext} />}
+                            {renamingPath === file.relativePath ? (
+                              <Input
+                                defaultValue={file.name}
+                                autoFocus
+                                onBlur={(e) => handleRenameSubmit(file, e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    handleRenameSubmit(file, (e.target as HTMLInputElement).value);
+                                  } else if (e.key === 'Escape') {
+                                    setRenamingPath(null);
+                                  }
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ flex: 1 }}
+                              />
+                            ) : (
+                              <span onClick={(e) => handleFileNameClick(e, file)}>{file.name}</span>
+                            )}
+                          </Flex>
+                        </div>
+                        <div className="list-item-date">{formatTime(file.modified)}</div>
+                        <div className="list-item-date">{file.customTime ? formatTime(Date.parse(file.customTime)) : '-'}</div>
+                        <div className="list-item-level">
+                          <Tag color={levelTagMeta(file.levelTag).color}>
+                            {levelTagMeta(file.levelTag).label}
+                          </Tag>
+                          {operationStatus[file.fullPath] && (
+                            <Tag color="processing" style={{ marginLeft: 8 }}>
+                              {operationStatus[file.fullPath].operation}...
+                            </Tag>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </>
                 ) : (
                   files.map((file) => (
                     <Card
                       key={file.relativePath}
                       size="small"
+                      ref={(el) => { if (el) fileRefs.current[file.relativePath] = el; }}
                       className={`file-card ${
                         selected.includes(file.relativePath) ? 'selected' : ''
                       }`}
-                      onClick={() => toggleSelect(file.relativePath)}
+                      onClick={(e) => handleFileClick(e, file)}
                       onDoubleClick={() => onOpen(file)}
                       extra={
                         <Tag color={levelTagMeta(file.levelTag).color}>
@@ -504,7 +795,24 @@ const App: React.FC = () => {
                       <Flex align="center" gap={8}>
                         {file.isDirectory ? <FolderOpenOutlined /> : <FileIcon ext={file.ext} />}
                         <div style={{ flex: 1 }}>
-                          <div className="name">{file.name}</div>
+                          {renamingPath === file.relativePath ? (
+                            <Input
+                              defaultValue={file.name}
+                              autoFocus
+                              onBlur={(e) => handleRenameSubmit(file, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleRenameSubmit(file, (e.target as HTMLInputElement).value);
+                                } else if (e.key === 'Escape') {
+                                  setRenamingPath(null);
+                                }
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ width: '100%' }}
+                            />
+                          ) : (
+                            <div className="name" onClick={(e) => handleFileNameClick(e, file)}>{file.name}</div>
+                          )}
                           <div className="meta">
                             {file.isDirectory ? '文件夹' : formatSize(file.size)} ·{' '}
                             {formatTime(file.customTime ? Date.parse(file.customTime) : file.created)}
