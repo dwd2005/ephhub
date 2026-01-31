@@ -3,7 +3,6 @@ import { Button, Card, Flex, Segmented, Space, Tag, Tooltip } from 'antd';
 import {
   AppstoreOutlined,
   ClockCircleOutlined,
-  CloudUploadOutlined,
   CopyOutlined,
   DeleteOutlined,
   FolderAddOutlined,
@@ -15,7 +14,6 @@ import {
 
 type Props = {
   onNewFolder: () => void;
-  onUpload: () => void;
   onSetLevel: (level: LevelTag) => void;
   onMoveOrCopy: (mode: 'move' | 'copy') => void;
   onDelete: () => void;
@@ -31,7 +29,6 @@ type Props = {
 
 const ActionRibbon: React.FC<Props> = ({
   onNewFolder,
-  onUpload,
   onSetLevel,
   onMoveOrCopy,
   onDelete,
@@ -50,9 +47,6 @@ const ActionRibbon: React.FC<Props> = ({
         <Space>
           <Button icon={<FolderAddOutlined />} onClick={onNewFolder}>
             新建文件夹
-          </Button>
-          <Button icon={<CloudUploadOutlined />} onClick={onUpload}>
-            上传
           </Button>
         </Space>
         <Space>

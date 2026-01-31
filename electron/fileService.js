@@ -162,16 +162,54 @@ async function moveEntries(rootPath, relativePaths, destRelative) {
   return moved;
 }
 
+function formatCopyName(baseName, attempt = 1) {
+  const { name, ext } = path.parse(baseName);
+  const suffix = attempt === 1 ? ' 副本' : ` 副本 (${attempt})`;
+  const nextName = ext ? `${name}${suffix}${ext}` : `${name}${suffix}`;
+  return nextName;
+}
+
+async function ensureUniqueName(destBase, desiredName, reserved = new Set()) {
+  let candidate = desiredName;
+  let attempt = 1;
+  while (reserved.has(candidate) || (await fs.pathExists(path.join(destBase, candidate)))) {
+    candidate = formatCopyName(desiredName, attempt);
+    attempt += 1;
+  }
+  reserved.add(candidate);
+  return candidate;
+}
+
 async function copyEntries(rootPath, relativePaths, destRelative) {
   const copied = [];
   const destBase = ensureInsideRoot(rootPath, path.join(rootPath, destRelative));
   await fs.ensureDir(destBase);
+  const reserved = new Set();
 
   for (const rel of relativePaths) {
     const from = ensureInsideRoot(rootPath, path.join(rootPath, rel));
-    const to = ensureInsideRoot(rootPath, path.join(destBase, path.basename(rel)));
-    await fs.copy(from, to, { overwrite: false, errorOnExist: true });
-    copied.push({ from, to });
+    const desiredName = path.basename(rel);
+    const finalName = await ensureUniqueName(destBase, desiredName, reserved);
+    const to = ensureInsideRoot(rootPath, path.join(destBase, finalName));
+    await fs.copy(from, to, { overwrite: false, errorOnExist: false });
+    copied.push({ from, to, finalName });
+  }
+  return copied;
+}
+
+async function importExternalEntries(rootPath, destRelative, sourcePaths) {
+  const copied = [];
+  const destBase = ensureInsideRoot(rootPath, path.join(rootPath, destRelative));
+  await fs.ensureDir(destBase);
+  const reserved = new Set();
+
+  for (const source of sourcePaths) {
+    if (!(await fs.pathExists(source))) continue;
+    const desiredName = path.basename(source);
+    const finalName = await ensureUniqueName(destBase, desiredName, reserved);
+    const target = ensureInsideRoot(rootPath, path.join(destBase, finalName));
+    await fs.copy(source, target, { overwrite: false, errorOnExist: false });
+    copied.push({ from: source, to: target, finalName });
   }
   return copied;
 }
@@ -188,5 +226,6 @@ module.exports = {
   copyEntries,
   toRelative,
   scanRoot,
-  createFile
+  createFile,
+  importExternalEntries
 };

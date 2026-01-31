@@ -39,6 +39,7 @@ type Store = {
   closeTab: (id: string) => void;
   activateTab: (id: string) => void;
   updateTab: (id: string, patch: Partial<{ path: string; title: string; rootId: string }>) => void;
+  reorderTabs: (fromId: string, toId: string) => void;
 };
 
 export const useStore = create<Store>((set) => ({
@@ -87,7 +88,7 @@ export const useStore = create<Store>((set) => ({
 
   addMessage: (payload) =>
     set((state) => ({
-      messages: [...state.messages, { ...payload, id: Date.now() }]
+      messages: [...state.messages, { ...payload, id: Date.now() + Math.floor(Math.random() * 1000) }]
     })),
   removeMessage: (id) =>
     set((state) => ({
@@ -133,5 +134,15 @@ export const useStore = create<Store>((set) => ({
   updateTab: (id, patch) =>
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t))
-    }))
+    })),
+  reorderTabs: (fromId, toId) =>
+    set((state) => {
+      const fromIndex = state.tabs.findIndex((t) => t.id === fromId);
+      const toIndex = state.tabs.findIndex((t) => t.id === toId);
+      if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return {};
+      const nextTabs = [...state.tabs];
+      const [moved] = nextTabs.splice(fromIndex, 1);
+      nextTabs.splice(toIndex, 0, moved);
+      return { tabs: nextTabs };
+    })
 }));

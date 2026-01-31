@@ -70,6 +70,9 @@ interface Window {
     createFolder: (payload: { rootId: string; relativePath: string; name: string }) => Promise<ApiResult<string>>;
     createFile: (payload: { rootId: string; relativePath: string; name: string; templatePath?: string; content?: string }) => Promise<ApiResult<string>>;
     upload: (payload: { rootId: string; relativePath: string; files: string[] }) => Promise<ApiResult<string[]>>;
+    pasteFromClipboard: (payload: { rootId: string; relativePath: string }) => Promise<ApiResult<{ from: string; to: string; finalName: string }[]>>;
+    getClipboardFiles: () => Promise<ApiResult<string[]>>;
+    cleanTemp: (payload: { rootId: string; targets?: string[]; basePath?: string }) => Promise<ApiResult<boolean>>;
     rename: (payload: { rootId: string; relativePath: string; name: string }) => Promise<ApiResult<string>>;
     delete: (payload: { rootId: string; targets: string[] }) => Promise<ApiResult<string[]>>;
     move: (payload: { rootId: string; targets: string[]; destination: string }) => Promise<ApiResult<{ from: string; to: string }[]>>;

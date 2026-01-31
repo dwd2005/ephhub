@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard } = require('electron');
 const { randomUUID } = require('crypto');
 const fs = require('fs-extra');
 const { readConfig, writeConfig } = require('./config');
@@ -101,6 +101,36 @@ async function runWithStatus(paths, operation, task) {
   } finally {
     paths.forEach((p) => clearOperation(p));
   }
+}
+
+async function getClipboardFilePaths() {
+  const fileListBuffer = clipboard.readBuffer('FileNameW');
+  let paths = [];
+  if (fileListBuffer && fileListBuffer.length) {
+    const raw = fileListBuffer.toString('ucs2');
+    paths = raw.split('\u0000').filter(Boolean).map((p) => p.replace(/^\\\\\?\\/, ''));
+  }
+  if (!paths.length) {
+    const text = clipboard.readText().trim();
+    if (text) {
+      paths = text
+        .split(/\r?\n/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+    }
+  }
+  const existing = [];
+  for (const p of paths) {
+    try {
+      const stat = await fs.stat(p);
+      if (stat.isFile() || stat.isDirectory()) {
+        existing.push(p);
+      }
+    } catch (err) {
+      // ignore invalid paths
+    }
+  }
+  return existing;
 }
 
 function registerIpc() {
@@ -253,6 +283,86 @@ function registerIpc() {
       const copied = await fileService.copyEntries(root.path, targets, destination);
       await Promise.all(copied.map(({ to }) => watcherManager.handleAdd(root, to, false)));
       return copied;
+    });
+  });
+
+  withErrorHandling('clipboard:get-files', async () => {
+    return getClipboardFilePaths();
+  });
+
+  withErrorHandling('fs:paste-clipboard', async (_evt, payload) => {
+    const { rootId, relativePath } = payload;
+    const root = ensureRoot(rootId);
+    const sources = await getClipboardFilePaths();
+    if (!sources.length) return [];
+
+    const plannedTargets = sources.map((src) =>
+      path.join(root.path, relativePath || '.', path.basename(src))
+    );
+    return runWithStatus(plannedTargets, 'copy', async () => {
+      const copied = await fileService.importExternalEntries(
+        root.path,
+        relativePath || '.',
+        sources
+      );
+      await Promise.all(copied.map(({ to }) => watcherManager.handleAdd(root, to, false)));
+      return copied;
+    });
+  });
+
+  withErrorHandling('fs:clean-temp', async (_evt, payload) => {
+    const { rootId, targets = [], basePath = '.' } = payload;
+    const root = ensureRoot(rootId);
+    const baseList = targets.length ? targets : [basePath || '.'];
+    const absList = baseList.map((rel) => fileService.ensureInsideRoot(root.path, path.join(root.path, rel)));
+
+    const levelCache = new Map();
+    const getLevel = async (absPath) => {
+      if (levelCache.has(absPath)) return levelCache.get(absPath);
+      const info = await db.getInfo([absPath]);
+      const level = info[absPath]?.levelTag ?? null;
+      levelCache.set(absPath, level);
+      return level;
+    };
+
+    const cleanNode = async (absPath) => {
+      const stat = await fs.stat(absPath);
+      const level = await getLevel(absPath);
+
+      if (stat.isFile()) {
+        if (level === 'temp') {
+          await shell.trashItem(absPath);
+          await watcherManager.handleDelete(root, absPath);
+          return { hasNonTemp: false };
+        }
+        return { hasNonTemp: true };
+      }
+
+      // directory
+      const children = await fs.readdir(absPath);
+      let hasNonTempChild = false;
+      for (const name of children) {
+        const child = path.join(absPath, name);
+        const result = await cleanNode(child);
+        if (result.hasNonTemp) hasNonTempChild = true;
+      }
+
+      const isTempDir = level === 'temp';
+      if (isTempDir && !hasNonTempChild) {
+        await shell.trashItem(absPath);
+        await watcherManager.handleDelete(root, absPath);
+        return { hasNonTemp: false };
+      }
+
+      // keep directory itself
+      return { hasNonTemp: true };
+    };
+
+    return runWithStatus(absList, 'delete', async () => {
+      for (const abs of absList) {
+        await cleanNode(abs);
+      }
+      return true;
     });
   });
 

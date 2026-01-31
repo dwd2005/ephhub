@@ -10,6 +10,7 @@ import {
   FileTextOutlined,
   FolderAddOutlined,
   FolderOpenOutlined,
+  DeleteOutlined,
   ScissorOutlined,
   SnippetsOutlined,
   TagOutlined
@@ -70,7 +71,8 @@ const FileBrowser: React.FC = () => {
     isDragging,
     setIsDragging,
     clipboard,
-    setClipboard
+    setClipboard,
+    reorderTabs
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<string>('');
@@ -242,15 +244,6 @@ const FileBrowser: React.FC = () => {
     });
   };
 
-  const handleUpload = async () => {
-    const picked = await handle<string[]>(window.api.chooseFiles());
-    if (!picked?.length) return;
-    await handle(
-      window.api.upload({ rootId: currentRootId!, relativePath: currentPath, files: picked })
-    );
-    refresh();
-  };
-
   const handleDelete = async () => {
     if (!selected.length) return message.info('请选择文件');
     await handle(window.api.delete({ rootId: currentRootId!, targets: selected }));
@@ -309,32 +302,46 @@ const FileBrowser: React.FC = () => {
 
   const handlePaste = async () => {
     closeContextMenu();
-    if (!clipboard) return message.info('剪贴板为空');
     if (!currentRootId) return message.info('请先选择根目录');
-    if (clipboard.rootId !== currentRootId) {
-      return message.warning('只能在同一根目录中粘贴');
-    }
-    try {
-      if (clipboard.mode === 'copy') {
-        await handle(
-          window.api.copy({
-            rootId: currentRootId,
-            targets: clipboard.paths,
-            destination: currentPath
-          })
-        );
-        message.success('粘贴完成');
-      } else {
-        await handle(
-          window.api.move({
-            rootId: currentRootId,
-            targets: clipboard.paths,
-            destination: currentPath
-          })
-        );
-        setClipboard(null);
-        message.success('移动完成');
+    if (clipboard) {
+      if (clipboard.rootId !== currentRootId) {
+        return message.warning('只能在同一根目录中粘贴');
       }
+      try {
+        if (clipboard.mode === 'copy') {
+          await handle(
+            window.api.copy({
+              rootId: currentRootId,
+              targets: clipboard.paths,
+              destination: currentPath
+            })
+          );
+          message.success('粘贴完成');
+        } else {
+          await handle(
+            window.api.move({
+              rootId: currentRootId,
+              targets: clipboard.paths,
+              destination: currentPath
+            })
+          );
+          setClipboard(null);
+          message.success('移动完成');
+        }
+        clearSelection();
+        refresh();
+        return;
+      } catch (err) {}
+    }
+
+    // 支持从操作系统剪贴板粘贴文件/文件夹
+    try {
+      const external = await handle<string[]>(window.api.getClipboardFiles());
+      if (!external?.length) return message.info('剪贴板中没有可粘贴的文件');
+      await handle(
+        window.api.pasteFromClipboard({ rootId: currentRootId, relativePath: currentPath })
+      );
+      message.success('粘贴完成');
       clearSelection();
       refresh();
     } catch (err) {}
@@ -437,6 +444,19 @@ const FileBrowser: React.FC = () => {
     });
     if (!confirmed) return;
     await handle(window.api.deleteByLevel({ rootId: currentRootId, levelTag: 'temp' }));
+    refresh();
+  };
+
+  const handleCleanTemp = async (paths?: string[]) => {
+    if (!currentRootId) return message.info('请先选择根目录');
+    await handle(
+      window.api.cleanTemp({
+        rootId: currentRootId,
+        targets: paths && paths.length ? paths : undefined,
+        basePath: currentPath
+      })
+    );
+    message.success('临时内容已清理');
     refresh();
   };
 
@@ -774,7 +794,7 @@ const FileBrowser: React.FC = () => {
       key: 'paste',
       label: '粘贴',
       icon: <SnippetsOutlined />,
-      disabled: !clipboard || !currentRootId || clipboard.rootId !== currentRootId,
+      disabled: !currentRootId,
       onClick: handlePaste
     };
 
@@ -840,6 +860,13 @@ const FileBrowser: React.FC = () => {
         pasteItem,
         { type: 'divider' as const },
         {
+          key: 'clean-temp',
+          label: '清理临时内容',
+          icon: <DeleteOutlined />,
+          onClick: () => handleCleanTemp([menuState.target!.relativePath])
+        },
+        { type: 'divider' as const },
+        {
           key: 'rename',
           label: '重命名',
           icon: <EditOutlined />,
@@ -885,6 +912,12 @@ const FileBrowser: React.FC = () => {
           icon: <CopyOutlined />,
           onClick: () => handleCopyOrCut('copy')
         },
+        {
+          key: 'clean-temp',
+          label: '清理临时内容',
+          icon: <DeleteOutlined />,
+          onClick: () => handleCleanTemp(selected)
+        },
         timeItem(selected),
         levelMenu(selected)
       ];
@@ -893,6 +926,12 @@ const FileBrowser: React.FC = () => {
     if (menuState.type === 'blank') {
       return [
         pasteItem,
+        {
+          key: 'clean-temp',
+          label: '清理当前目录中的临时内容',
+          icon: <DeleteOutlined />,
+          onClick: () => handleCleanTemp()
+        },
         {
           key: 'new',
           label: '新建',
@@ -947,7 +986,7 @@ const FileBrowser: React.FC = () => {
           }
         }}
         onEditTabs={onEditTabs}
-        onAddTab={addNewTab}
+        onReorderTabs={reorderTabs}
         onMinimize={handleMinimize}
         onMaximize={handleMaximize}
         onClose={handleClose}
@@ -984,7 +1023,6 @@ const FileBrowser: React.FC = () => {
         <div className="file-area">
           <ActionRibbon
             onNewFolder={handleNewFolder}
-            onUpload={handleUpload}
             onSetLevel={handleSetLevel}
             onMoveOrCopy={handleMoveOrCopy}
             onDelete={handleDelete}
