@@ -388,7 +388,24 @@ async function getShellNewTemplate(ext) {
   return {};
 }
 
-async function getNewFileTypes(commonExts = ['.txt', '.docx', '.xlsx', '.pptx', '.zip']) {
+async function getNewFileTypes() {
+  const commonExts = [
+    // 文档类
+    '.txt', '.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.pdf',
+    // 图片类
+    '.bmp', '.jpg', '.jpeg', '.png', '.gif', '.tiff', '.ico',
+    // 音频类
+    '.mp3', '.wav', '.wma',
+    // 视频类
+    '.avi', '.mp4', '.wmv', '.mov',
+    // 压缩类
+    '.zip', '.rar', '.7z',
+    // 代码类
+    '.html', '.css', '.js', '.json', '.xml',
+    // 其他
+    '.log', '.csv', '.md'
+  ];
+  
   const results = [];
   for (const ext of commonExts) {
     if (!(await hasShellNew(ext))) continue;

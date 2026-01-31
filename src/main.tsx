@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConfigProvider, App as AntApp } from 'antd';
-import App from './pages/App';
+import App from './app/App';
 import 'antd/dist/reset.css';
 import './styles/variables.css';
 import './styles/global.css';
