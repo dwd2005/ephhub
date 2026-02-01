@@ -113,12 +113,12 @@ const PathSearchBar: React.FC<Props> = ({
             allowClear
             className="search-bar"
           />
-          <Button icon={<SwapOutlined rotate={90} />} onClick={onToggleSearch}>
+          <Button icon={<SwapOutlined rotate={90} />} onClick={onToggleSearch} size="small" style={{ width: '94px' }}>
             高级筛选
           </Button>
         </Flex>
         {searchOpen && (
-          <Flex gap={8} style={{ marginTop: 8 }}>
+          <Flex gap={8} style={{ position: 'absolute', top: '100%', left: 0, right: 0, padding: '12px 16px', backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)', zIndex: 1000 }}>
             <Segmented
               options={levelTagOptions.map((o) => ({ label: o.label, value: o.key ?? 'none' }))}
               onChange={() => {}}

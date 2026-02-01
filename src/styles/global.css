@@ -9,7 +9,7 @@
 
 .app-shell {
   display: grid;
-  grid-template-rows: 60px 64px 1fr;
+  grid-template-rows: 40px 46px 1fr;
   height: 100vh;
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -65,7 +65,7 @@
 }
 
 .middle-bar {
-  padding: 8px 5px;
+  padding: 8px 0px;
   background: var(--bg-secondary);
   display: flex;
   justify-content: space-between;

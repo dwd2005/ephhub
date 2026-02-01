@@ -50,7 +50,7 @@ const ActionRibbon: React.FC<Props> = ({
           </Button>
         </Space>
         <Space>
-          <Button icon={<TagOutlined />} onClick={() => onSetLevel('important')}>
+          <Button onClick={() => onSetLevel('important')}>
             标记重要
           </Button>
           <Button onClick={() => onSetLevel('normal')}>标记常规</Button>
@@ -58,20 +58,13 @@ const ActionRibbon: React.FC<Props> = ({
           <Button onClick={() => onSetLevel(null)}>清空标记</Button>
         </Space>
         <Space>
-          <Button icon={<ScissorOutlined />} onClick={() => onMoveOrCopy('move')}>
-            剪切
-          </Button>
-          <Button icon={<CopyOutlined />} onClick={() => onMoveOrCopy('copy')}>
-            复制
-          </Button>
-          <Button danger icon={<DeleteOutlined />} onClick={onDelete}>
-            删除
-          </Button>
+          <Button icon={<ScissorOutlined />} onClick={() => onMoveOrCopy('move')} />
+          <Button icon={<CopyOutlined />} onClick={() => onMoveOrCopy('copy')} />
+          <Button danger icon={<DeleteOutlined />} onClick={onDelete} />
         </Space>
         <Space>
           <Button onClick={onSelectAll}>全选</Button>
           <Button onClick={onClearSelection}>清空选择</Button>
-          <Button onClick={onClearTemp}>清空临时</Button>
         </Space>
         <Space className="view-switch">
           <Segmented

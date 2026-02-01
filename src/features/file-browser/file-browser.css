@@ -4,6 +4,21 @@
   box-shadow: var(--shadow-sm);
 }
 
+.search-card .ant-card-body {
+  padding: 6px 14px;
+}
+
+.search-card .ant-btn {
+  height: 30px;
+  padding: 2px;
+  font-size: 14px;
+}
+
+.search-card .ant-input {
+  height: 22px;
+  font-size: 13px;
+}
+
 .tab-bar {
   flex: 1;
   overflow: hidden;
@@ -15,9 +30,11 @@
 
 .tab-bar .ant-tabs-nav {
   margin-bottom: 0;
+  height: 32px;
 }
 
 .tab-bar .ant-tabs-tab {
+  height: 28px;
   padding: 8px 16px;
   width: 240px;
   flex: 1;
@@ -48,16 +65,24 @@
   margin-left: 8px;
 }
 
+.tab-bar .ant-tabs-nav-add {
+  padding: 8px 12px;
+  padding-top: 2px;
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
 .tab-bar .ant-tabs-nav-more {
   padding: 8px;
 }
 
 .path-bar {
-  padding: 6px 12px;
+  padding: 4px 10px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  min-height: 32px;
+  min-height: 28px;
   display: flex;
   align-items: center;
   width: 100%;
@@ -85,7 +110,7 @@
 }
 
 .path-bar-container {
-  width: 60%;
+  width: 50%;
   flex-shrink: 0;
 }
 
@@ -128,7 +153,7 @@
 
 .list-item {
   display: flex;
-  padding: 8px 12px;
+  padding: 4px 14px;
   cursor: pointer;
   transition: background-color var(--transition-fast) ease;
   border-bottom: 1px solid var(--border-color);
