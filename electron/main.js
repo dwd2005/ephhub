@@ -233,6 +233,15 @@ function registerIpc() {
     const existing = getRootById(id);
     if (!existing) return null;
     watcherManager.stopForRoot(id);
+    // clear metadata for this root from DB
+    try {
+      const rows = await db.listByRoot(existing.path);
+      if (rows?.length) {
+        await db.deleteRecords(rows.map((r) => r.physical_path));
+      }
+    } catch (err) {
+      console.warn('Failed to purge DB for removed root', err);
+    }
     const nextRoots = config.roots.filter((r) => r.id !== id);
     persistConfig({ ...config, roots: nextRoots, lastRootId: nextRoots[0]?.id || null });
     return id;

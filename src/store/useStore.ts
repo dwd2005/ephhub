@@ -19,11 +19,11 @@ type Store = {
   setRoots: (roots: RootItem[], lastRootId: string | null) => void;
   setCurrentRootId: (id: string | null) => void;
   setCurrentPath: (path: string) => void;
-  setFiles: (files: FileEntry[]) => void;
+  setFiles: (files: FileEntry[] | ((prev: FileEntry[]) => FileEntry[])) => void;
   setTimeBuckets: (data: TimeBucket[]) => void;
   setViewMode: (mode: ViewMode) => void;
   setDisplayMode: (mode: DisplayMode) => void;
-  setSelected: (paths: string[]) => void;
+  setSelected: (paths: string[] | ((prev: string[]) => string[])) => void;
   selectSingle: (path: string) => void;
   toggleSelect: (path: string) => void;
   clearSelection: () => void;
@@ -66,11 +66,17 @@ export const useStore = create<Store>((set) => ({
     })),
   setCurrentRootId: (id) => set({ currentRootId: id, currentPath: '.' }),
   setCurrentPath: (path) => set({ currentPath: path }),
-  setFiles: (files) => set({ files }),
+  setFiles: (files) =>
+    set((state) => ({
+      files: typeof files === 'function' ? files(state.files) : files
+    })),
   setTimeBuckets: (data) => set({ timeBuckets: data }),
   setViewMode: (mode) => set({ viewMode: mode }),
   setDisplayMode: (mode) => set({ displayMode: mode }),
-  setSelected: (paths) => set({ selected: paths }),
+  setSelected: (paths) =>
+    set((state) => ({
+      selected: typeof paths === 'function' ? paths(state.selected) : paths
+    })),
   selectSingle: (path) => set({ selected: [path] }),
   toggleSelect: (path) =>
     set((state) => {

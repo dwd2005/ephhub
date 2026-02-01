@@ -31,6 +31,8 @@ const FileListView: React.FC<Props> = ({
   operationStatus,
   setRenamingPath
 }) => {
+  const safeSelected = Array.isArray(selected) ? selected : [];
+
   return (
     <>
       <div className="list-header">
@@ -45,7 +47,7 @@ const FileListView: React.FC<Props> = ({
           ref={(el) => {
             if (el) fileRefs.current[file.relativePath] = el;
           }}
-          className={`list-item ${selected.includes(file.relativePath) ? 'selected' : ''}`}
+          className={`list-item ${safeSelected.includes(file.relativePath) ? 'selected' : ''}`}
           onClick={(e) => onFileClick(e, file)}
           onDoubleClick={() => onOpen(file)}
           onContextMenu={(e) => onContextMenu(e, file)}
@@ -61,6 +63,14 @@ const FileListView: React.FC<Props> = ({
                 <Input
                   defaultValue={file.name}
                   autoFocus
+                  spellCheck={false}
+                  onFocus={(e) => {
+                    const val = e.target.value;
+                    const dot = val.lastIndexOf('.');
+                    const end = dot > 0 ? dot : val.length;
+                    // 选中不含扩展名
+                    e.target.setSelectionRange(0, end);
+                  }}
                   onBlur={(e) => onRenameSubmit(file, e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {

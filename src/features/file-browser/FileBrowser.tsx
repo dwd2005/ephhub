@@ -49,6 +49,16 @@ const levelTagOptions: { key: LevelTag; label: string }[] = [
   { key: null, label: '全部' }
 ];
 
+const normalizeRelPath = (p: string) => p.replace(/\\/g, '/');
+const isSamePath = (a: string, b: string) => normalizeRelPath(a) === normalizeRelPath(b);
+const parentPathOf = (p: string) => {
+  const n = normalizeRelPath(p);
+  const idx = n.lastIndexOf('/');
+  if (idx === -1) return '.';
+  const parent = n.slice(0, idx);
+  return parent || '.';
+};
+
 const FileBrowser: React.FC = () => {
   const {
     roots,
@@ -120,19 +130,6 @@ const FileBrowser: React.FC = () => {
     const parts = path.split(/[\\/]/).filter(Boolean);
     return parts[parts.length - 1] || root?.name || '未命名';
   };
-
-  useEffect(() => {
-    bootstrap();
-    window.api.onFsChange((payload) => {
-      const active = useStore.getState().currentRootId;
-      if (payload.rootId === active) {
-        refresh();
-      }
-      setTreeRefreshKey((v) => v + 1);
-    });
-    window.api.onOperationStart((payload) => setOperation(payload));
-    window.api.onOperationEnd((payload) => clearOperation(payload.path));
-  }, []);
 
   useEffect(() => {
     if (currentRootId) {
@@ -220,7 +217,7 @@ const FileBrowser: React.FC = () => {
     }
   };
 
-  const refresh = async () => {
+  const refresh = React.useCallback(async () => {
     const state = useStore.getState();
     if (!state.currentRootId) return;
     setLoading(true);
@@ -237,7 +234,69 @@ const FileBrowser: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [handle, setFiles, setTimeBuckets]);
+
+  const applyFsChange = React.useCallback(
+    async (payload: { rootId: string; type: 'add' | 'delete' | 'change'; path: string }) => {
+      const state = useStore.getState();
+      if (!state.currentRootId || payload.rootId !== state.currentRootId) return;
+      if (state.viewMode === 'time') {
+        refresh();
+        return;
+      }
+
+      const parent = parentPathOf(payload.path);
+      if (parent !== state.currentPath) return;
+
+      if (payload.type === 'delete') {
+        setFiles((prev) => prev.filter((f) => !isSamePath(f.relativePath, payload.path)));
+        setSelected((prev) => prev.filter((p) => !isSamePath(p, payload.path)));
+        return;
+      }
+
+      try {
+        const list = await handle(
+          window.api.list({ rootId: state.currentRootId, relativePath: parent })
+        );
+        const target = list.find((f) => isSamePath(f.relativePath, payload.path));
+        if (!target) return;
+
+        // keep untouched items as-is; only swap/insert the changed one
+        setFiles((prev) => {
+          const exists = prev.some((f) => isSamePath(f.relativePath, target.relativePath));
+          if (exists) {
+            return prev.map((f) => (isSamePath(f.relativePath, target.relativePath) ? target : f));
+          }
+
+          // follow backend ordering to minimise diff
+          const orderMap = list.reduce<Record<string, number>>((acc, f, idx) => {
+            acc[normalizeRelPath(f.relativePath)] = idx;
+            return acc;
+          }, {});
+          const next = [...prev.filter((f) => !isSamePath(f.relativePath, target.relativePath)), target];
+          return next.sort(
+            (a, b) =>
+              (orderMap[normalizeRelPath(a.relativePath)] ?? 0) -
+              (orderMap[normalizeRelPath(b.relativePath)] ?? 0)
+          );
+        });
+      } catch (err) {
+        // fallback to full refresh if incremental update fails
+        refresh();
+      }
+    },
+    [handle, refresh, setFiles, setSelected]
+  );
+
+  useEffect(() => {
+    bootstrap();
+    window.api.onFsChange((payload) => {
+      applyFsChange(payload);
+      setTreeRefreshKey((v) => v + 1);
+    });
+    window.api.onOperationStart((payload) => setOperation(payload));
+    window.api.onOperationEnd((payload) => clearOperation(payload.path));
+  }, [applyFsChange, clearOperation, setOperation]);
 
   const openAddRoot = async () => {
     const picked = await handle<string | null>(window.api.chooseRoot());
@@ -263,6 +322,29 @@ const FileBrowser: React.FC = () => {
           })
         );
         refresh();
+      }
+    });
+  };
+
+  const handleRemoveRoot = (id: string) => {
+    if (!roots.find((r) => r.id === id)) return;
+    modal.confirm({
+      title: '移除根目录',
+      content: '只会移除列表与元数据，不会删除磁盘文件，确认移除该根目录吗？',
+      okType: 'danger',
+      onOk: async () => {
+        await handle(window.api.removeRoot({ id }));
+        const nextRoots = roots.filter((r) => r.id !== id);
+        setRoots(nextRoots, nextRoots[0]?.id || null);
+
+        // 关闭属于该根目录的标签页
+        useStore.getState().tabs
+          .filter((t) => t.rootId === id)
+          .forEach((t) => closeTab(t.id));
+
+        // 清空当前路径和选择
+        clearSelection();
+        setCurrentPath('.');
       }
     });
   };
@@ -598,6 +680,8 @@ const FileBrowser: React.FC = () => {
 
   const handleFileNameClick = (e: React.MouseEvent, file: FileEntry) => {
     e.stopPropagation();
+    // 跳过双击（双击交给 onOpen 处理）
+    if ((e.detail || 1) > 1) return;
     if (selected.includes(file.relativePath)) {
       setRenamingPath(file.relativePath);
     } else {
@@ -611,25 +695,74 @@ const FileBrowser: React.FC = () => {
       setRenamingPath(null);
       return;
     }
-    try {
-      await handle(
-        window.api.rename({
-          rootId: currentRootId!,
-          relativePath: file.relativePath,
-          name: trimmedName
-        })
-      );
-      refresh();
-    } catch (err) {
-    } finally {
-      setRenamingPath(null);
+
+    const getExt = (name: string) => {
+      const idx = name.lastIndexOf('.');
+      return idx > 0 ? name.slice(idx + 1).toLowerCase() : '';
+    };
+    const oldExt = getExt(file.name);
+    const newExt = getExt(trimmedName);
+
+    const doRename = async () => {
+      try {
+        await handle(
+          window.api.rename({
+            rootId: currentRootId!,
+            relativePath: file.relativePath,
+            name: trimmedName
+          })
+        );
+        if (viewMode === 'time') {
+          refresh();
+        } else {
+          // 本地更新，避免整页刷新闪烁
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.relativePath === file.relativePath
+                ? {
+                    ...f,
+                    name: trimmedName,
+                    ext: getExt(trimmedName),
+                    fullPath: f.fullPath.replace(/[^\\/]+$/, trimmedName),
+                    relativePath: f.relativePath.replace(/[^\\/]+$/, trimmedName)
+                  }
+                : f
+            )
+          );
+          // 同步已选项
+          setSelected((prev) =>
+            prev.map((p) => (p === file.relativePath ? p.replace(/[^\\/]+$/, trimmedName) : p))
+          );
+        }
+      } catch (err) {
+      } finally {
+        setRenamingPath(null);
+      }
+    };
+
+    if (oldExt !== newExt) {
+      modal.confirm({
+        title: '确认修改扩展名？',
+        content: `将把文件扩展名从 .${oldExt || '(无)'} 改为 .${newExt || '(无)'}`,
+        okType: 'danger',
+        onOk: () => doRename(),
+        onCancel: () => setRenamingPath(null)
+      });
+      return;
     }
+
+    await doRename();
   };
 
   const handleFileAreaMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('.file-card') || target.closest('.list-item')) return;
+    if (renamingPath) {
+      // 先让重命名输入框失焦触发保存
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      return;
+    }
     clearSelection();
     const rect = fileAreaRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -1076,6 +1209,7 @@ const FileBrowser: React.FC = () => {
             currentPath={currentPath}
             onSelectRoot={(id) => setCurrentRootId(id)}
             onAddRoot={openAddRoot}
+            onRemoveRoot={(id) => handleRemoveRoot(id)}
             onSelectPath={(p) => setCurrentPath(p)}
             treeRefreshKey={treeRefreshKey}
           />

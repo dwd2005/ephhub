@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Divider, Flex, List, Typography, Tree, Empty } from 'antd';
+import { Button, Divider, Flex, List, Typography, Tree, Empty, Dropdown } from 'antd';
 import type { DataNode } from 'antd/es/tree';
 import {
   HomeOutlined,
@@ -15,6 +15,7 @@ type Props = {
   currentRootId: string | null;
   onSelectRoot: (id: string) => void;
   onAddRoot: () => void;
+  onRemoveRoot: (id: string) => void;
   onSelectPath: (path: string) => void;
   currentPath: string;
   treeRefreshKey: number;
@@ -27,6 +28,7 @@ const SideBar: React.FC<Props> = ({
   currentRootId,
   onSelectRoot,
   onAddRoot,
+  onRemoveRoot,
   onSelectPath,
   currentPath,
   treeRefreshKey
@@ -134,18 +136,32 @@ const SideBar: React.FC<Props> = ({
             dataSource={roots}
             locale={{ emptyText: '暂无根目录' }}
             renderItem={(item) => (
-              <List.Item
-                className={item.id === currentRootId ? 'active-root' : ''}
-                onClick={() => onSelectRoot(item.id)}
-                style={{
-                  cursor: 'pointer',
-                  background: item.id === currentRootId ? 'var(--bg-hover)' : 'transparent',
-                  borderRadius: 6,
-                  padding: '6px 8px'
+              <Dropdown
+                trigger={['contextMenu']}
+                menu={{
+                  items: [
+                    {
+                      key: 'remove',
+                      danger: true,
+                      label: '删除根目录',
+                      onClick: () => onRemoveRoot(item.id)
+                    }
+                  ]
                 }}
               >
-                <List.Item.Meta title={item.name} />
-              </List.Item>
+                <List.Item
+                  className={item.id === currentRootId ? 'active-root' : ''}
+                  onClick={() => onSelectRoot(item.id)}
+                  style={{
+                    cursor: 'pointer',
+                    background: item.id === currentRootId ? 'var(--bg-hover)' : 'transparent',
+                    borderRadius: 6,
+                    padding: '6px 8px'
+                  }}
+                >
+                  <List.Item.Meta title={item.name} />
+                </List.Item>
+              </Dropdown>
             )}
           />
         </div>

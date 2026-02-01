@@ -31,6 +31,8 @@ const FileGridView: React.FC<Props> = ({
   operationStatus,
   setRenamingPath
 }) => {
+  const safeSelected = Array.isArray(selected) ? selected : [];
+
   return (
     <>
       {files.map((file) => (
@@ -40,7 +42,7 @@ const FileGridView: React.FC<Props> = ({
           ref={(el) => {
             if (el) fileRefs.current[file.relativePath] = el;
           }}
-          className={`file-card ${selected.includes(file.relativePath) ? 'selected' : ''}`}
+          className={`file-card ${safeSelected.includes(file.relativePath) ? 'selected' : ''}`}
           onClick={(e) => onFileClick(e, file)}
           onDoubleClick={() => onOpen(file)}
           onContextMenu={(e) => onContextMenu(e, file)}
@@ -57,6 +59,13 @@ const FileGridView: React.FC<Props> = ({
                 <Input
                   defaultValue={file.name}
                   autoFocus
+                  spellCheck={false}
+                  onFocus={(e) => {
+                    const val = e.target.value;
+                    const dot = val.lastIndexOf('.');
+                    const end = dot > 0 ? dot : val.length;
+                    e.target.setSelectionRange(0, end);
+                  }}
                   onBlur={(e) => onRenameSubmit(file, e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
