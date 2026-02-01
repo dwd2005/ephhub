@@ -52,7 +52,11 @@ const FileListView: React.FC<Props> = ({
         >
           <div className="list-item-name">
             <Flex align="center" gap={8}>
-              {file.isDirectory ? <FolderOpenOutlined /> : <FileIcon ext={file.ext} />}
+              {file.isDirectory ? (
+                <FolderOpenOutlined />
+              ) : (
+                <FileIcon fullPath={file.fullPath} size="small" ext={file.ext} />
+              )}
               {renamingPath === file.relativePath ? (
                 <Input
                   defaultValue={file.name}

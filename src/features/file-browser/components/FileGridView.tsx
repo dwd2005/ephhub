@@ -47,7 +47,11 @@ const FileGridView: React.FC<Props> = ({
           extra={<Tag color={levelTagMeta(file.levelTag).color}>{levelTagMeta(file.levelTag).label}</Tag>}
         >
           <Flex align="center" gap={8}>
-            {file.isDirectory ? <FolderOpenOutlined /> : <FileIcon ext={file.ext} />}
+            {file.isDirectory ? (
+              <FolderOpenOutlined />
+            ) : (
+              <FileIcon fullPath={file.fullPath} size="normal" ext={file.ext} />
+            )}
             <div style={{ flex: 1 }}>
               {renamingPath === file.relativePath ? (
                 <Input

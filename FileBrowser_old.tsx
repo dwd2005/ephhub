@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App as AntApp, Input, Modal, Space, DatePicker } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -21,7 +21,6 @@ import SideBar from '@/components/SideBar';
 import MessageHub from '@/components/MessageHub';
 import ContextMenu from '@/components/ContextMenu';
 import { useApiHelpers } from './hooks/useApiHelpers';
-import { useIcon } from './hooks/useIcon';
 import TopBar from './components/TopBar';
 import PathSearchBar from './components/PathSearchBar';
 import ActionRibbon from './components/ActionRibbon';
@@ -29,22 +28,9 @@ import FileDisplay from './components/FileDisplay';
 import type { NewFileType } from '@/types/newFile';
 import './file-browser.css';
 
-const AppIcon: React.FC<{ path?: string; size?: 'small' | 'normal' }> = ({
-  path,
-  size = 'small'
-}) => {
-  const icon = useIcon(path || '', size);
-  const pixel = size === 'normal' ? 32 : 18;
-  if (icon) {
-    return <img src={icon} width={pixel} height={pixel} style={{ objectFit: 'contain' }} />;
-  }
-  return <AppstoreOutlined />;
-};
-
-
 const levelTagOptions: { key: LevelTag; label: string }[] = [
   { key: 'important', label: '重要' },
-  { key: 'normal', label: '普通' },
+  { key: 'normal', label: '常规' },
   { key: 'temp', label: '临时' },
   { key: null, label: '全部' }
 ];
@@ -102,7 +88,6 @@ const FileBrowser: React.FC = () => {
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const [openWithApps, setOpenWithApps] = useState<OpenWithApp[]>([]);
   const [openWithLoading, setOpenWithLoading] = useState(false);
-  const [openWithExpanded, setOpenWithExpanded] = useState(false);
   const [newFileTypes, setNewFileTypes] = useState<NewFileType[]>([]);
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [menuState, setMenuState] = useState<{
@@ -192,12 +177,6 @@ const FileBrowser: React.FC = () => {
   }, [menuState.visible, menuState.type, menuState.target, handle]);
 
   useEffect(() => {
-    if (!menuState.visible) {
-      setOpenWithExpanded(false);
-    }
-  }, [menuState.visible]);
-
-  useEffect(() => {
     const loadNewFileTypes = async () => {
       try {
         const list = await handle(window.api.getNewFileTypes());
@@ -281,7 +260,7 @@ const FileBrowser: React.FC = () => {
       title: mode === 'move' ? '移动到' : '复制到',
       content: (
         <Input
-          placeholder="目标路径，例如 . 或 images"
+          placeholder="目标路径，如 . 或 images"
           defaultValue="."
           ref={(ref) => (destRef = ref)}
         />
@@ -398,12 +377,7 @@ const FileBrowser: React.FC = () => {
     });
   };
 
-  const promptNewFile = (options: {
-    ext: string;
-    placeholder: string;
-    templatePath?: string | null;
-    data?: string | null;
-  }) => {
+  const promptNewFile = (options: { ext: string; placeholder: string; templatePath?: string | null }) => {
     closeContextMenu();
     let inputRef: any = null;
     modal.confirm({
@@ -425,8 +399,7 @@ const FileBrowser: React.FC = () => {
             relativePath: currentPath,
             name: finalName,
             content: '',
-            templatePath: options.templatePath || undefined,
-            data: options.data || undefined
+            templatePath: options.templatePath || undefined
           })
         );
         refresh();
@@ -465,8 +438,8 @@ const FileBrowser: React.FC = () => {
     if (!currentRootId) return;
     const confirmed = await new Promise<boolean>((resolve) => {
       modal.confirm({
-        title: '清空“临时”等级文件',
-        content: '将删除所有标记为“临时”的文件/文件夹并移入回收站，确认继续吗？',
+        title: '清空临时级别文件',
+        content: '将删除所有标记为"临时"的文件/文件夹并移入回收站，确认继续？',
         onOk: () => resolve(true),
         onCancel: () => resolve(false)
       });
@@ -716,14 +689,16 @@ const FileBrowser: React.FC = () => {
 
   const operationsBusy = Object.keys(operationStatus).length > 0;
 
-  const openWithVisibleApps = useMemo(() => {
-    const limit = 5;
-    if (openWithExpanded || openWithApps.length <= limit) return openWithApps;
-    return openWithApps.slice(0, limit);
-  }, [openWithExpanded, openWithApps]);
-
   const openWithItems: MenuProps['items'] = menuState.target
     ? [
+        {
+          key: 'open-default',
+          label: '默认程序',
+          onClick: () => {
+            closeContextMenu();
+            onOpen(menuState.target!);
+          }
+        },
         ...(openWithLoading
           ? [
               {
@@ -733,47 +708,33 @@ const FileBrowser: React.FC = () => {
               }
             ]
           : openWithApps.length
-            ? [
-                ...openWithVisibleApps.map((app) => {
-                  const tag = app.isDefault ? ' (默认)' : app.lastUsed ? ' (最近使用)' : '';
-                  return {
-                    key: app.name || app.command,
-                    icon: <AppIcon path={app.iconPath} size="small" />,
-                    label: `${app.displayName || app.name}${tag}`,
-                    onClick: () => {
-                      closeContextMenu();
-                      return handle(
-                        window.api.openWithApp({
-                          command: app.command,
-                          filePath: menuState.target!.fullPath,
-                          name: app.name,
-                          displayName: app.displayName,
-                          iconPath: app.iconPath
-                        })
-                      );
-                    }
-                  };
-                }),
-                ...(openWithApps.length > openWithVisibleApps.length
-                  ? [
-                      {
-                        key: 'open-more',
-                        icon: <AppstoreOutlined />,
-                        label: '显示更多...',
-                        closeOnClick: false,
-                        onClick: (e: any) => {
-                          e?.domEvent?.preventDefault?.();
-                          e?.domEvent?.stopPropagation?.();
-                          setOpenWithExpanded(true);
-                        }
-                      } as any
-                    ]
-                  : [])
-              ]
+            ? openWithApps.map((app) => {
+                const iconPath = app.iconPath;
+                const isDllIcon = iconPath && iconPath.includes('.dll');
+                const isValidIcon = iconPath && !isDllIcon;
+                return {
+                  key: app.name,
+                  icon: isValidIcon ? (
+                    <AppstoreOutlined />
+                  ) : (
+                    <AppstoreOutlined />
+                  ),
+                  label: app.displayName || app.name,
+                  onClick: () => {
+                    closeContextMenu();
+                    return handle(
+                      window.api.openWithApp({
+                        command: app.command,
+                        filePath: menuState.target!.fullPath
+                      })
+                    );
+                  }
+                };
+              })
             : [
                 {
                   key: 'open-none',
-                  label: '未检索到关联程序',
+                  label: '未检测到关联程序',
                   disabled: true
                 }
               ]),
@@ -820,28 +781,34 @@ const FileBrowser: React.FC = () => {
     },
     ...(newFileTypes.length
       ? newFileTypes.map((type) => {
+          const iconPath = type.iconPath;
+          const isDllIcon = iconPath && iconPath.includes('.dll');
+          const isValidIcon = iconPath && !isDllIcon;
           return {
             key: `new-${type.extension}`,
             label: type.name || `新建${type.extension}`,
-            icon: <AppIcon path={type.iconPath} size="small" />,
+            icon: isValidIcon ? (
+              <FileTextOutlined />
+            ) : (
+              <FileTextOutlined />
+            ),
             onClick: () =>
               promptNewFile({
                 ext: type.extension,
                 placeholder: type.name || type.extension,
-                templatePath: type.templatePath || undefined,
-                data: type.data || undefined
+                templatePath: type.templatePath || undefined
               })
           };
         })
       : [
           {
             key: 'new-text',
-            label: '文本文件',
+            label: '文本文档',
             icon: <FileTextOutlined />,
             onClick: () =>
               promptNewFile({
                 ext: '.txt',
-                placeholder: '文本文件'
+                placeholder: '文本文档'
               })
           }
         ])
@@ -875,7 +842,7 @@ const FileBrowser: React.FC = () => {
         },
         {
           key: 'level-normal',
-          label: '普通',
+          label: '常规',
           onClick: () => handleSetLevelForPaths('normal', paths)
         },
         {
@@ -986,7 +953,7 @@ const FileBrowser: React.FC = () => {
         pasteItem,
         {
           key: 'clean-temp',
-          label: '清理当前目录的临时内容',
+          label: '清理当前目录中的临时内容',
           icon: <DeleteOutlined />,
           onClick: () => handleCleanTemp()
         },
@@ -1139,6 +1106,3 @@ const FileBrowser: React.FC = () => {
 };
 
 export default FileBrowser;
-
-
-

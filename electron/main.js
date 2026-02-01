@@ -20,6 +20,66 @@ const watcherManager = new WatcherManager(db, (payload) => {
   }
 });
 
+// --- icon cache & helpers --------------------------------------------------
+const iconCache = new Map(); // key: `${path}|${size}` -> dataURL
+async function getIconData(targetPath, size = 'small') {
+  if (!targetPath) return '';
+  const sanitized = (targetPath || '').replace(/^"|"$/g, '');
+  const filePath = sanitized.includes(',') ? sanitized.split(',')[0] : sanitized;
+  const key = `${filePath}|${size}`;
+  if (iconCache.has(key)) return iconCache.get(key);
+  try {
+    const icon = await app.getFileIcon(filePath, { size });
+    const dataUrl = icon ? icon.toDataURL() : '';
+    if (dataUrl) iconCache.set(key, dataUrl);
+    return dataUrl;
+  } catch (err) {
+    return '';
+  }
+}
+
+// --- open-with recent tracking ---------------------------------------------
+const RECENT_PATH = app ? path.join(app.getPath('userData'), 'openwith-recent.json') : null;
+let recentOpenWith = {};
+
+function loadRecentOpenWith() {
+  if (!RECENT_PATH) return;
+  try {
+    if (fs.existsSync(RECENT_PATH)) {
+      recentOpenWith = JSON.parse(fs.readFileSync(RECENT_PATH, 'utf8') || '{}');
+    }
+  } catch (err) {
+    recentOpenWith = {};
+  }
+}
+
+function saveRecentOpenWith() {
+  if (!RECENT_PATH) return;
+  try {
+    fs.ensureFileSync(RECENT_PATH);
+    fs.writeJsonSync(RECENT_PATH, recentOpenWith, { spaces: 2 });
+  } catch (err) {
+    // best effort
+  }
+}
+
+function rememberOpenWith(ext, appEntry) {
+  if (!ext || !appEntry) return;
+  const key = ext.toLowerCase();
+  if (!recentOpenWith[key]) recentOpenWith[key] = [];
+  const list = recentOpenWith[key].filter((item) => item.command !== appEntry.command);
+  list.unshift({
+    command: appEntry.command,
+    name: appEntry.name,
+    displayName: appEntry.displayName,
+    iconPath: appEntry.iconPath || '',
+    lastUsed: Date.now()
+  });
+  // keep only recent 10
+  recentOpenWith[key] = list.slice(0, 10);
+  saveRecentOpenWith();
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -208,9 +268,16 @@ function registerIpc() {
   });
 
   withErrorHandling('fs:create-file', async (_evt, payload) => {
-    const { rootId, relativePath, name, templatePath, content } = payload;
+    const { rootId, relativePath, name, templatePath, content, data } = payload;
     const root = ensureRoot(rootId);
-    const dest = await fileService.createFile(root.path, relativePath, name, templatePath, content);
+    const dest = await fileService.createFile(
+      root.path,
+      relativePath,
+      name,
+      templatePath,
+      content,
+      data
+    );
     await watcherManager.handleAdd(root, dest, false);
     return dest;
   });
@@ -417,6 +484,11 @@ function registerIpc() {
     return true;
   });
 
+  withErrorHandling('fs:get-icon', async (_evt, payload) => {
+    const { path: targetPath, size = 'small' } = payload || {};
+    return getIconData(targetPath, size);
+  });
+
   withErrorHandling('fs:set-custom-time', async (_evt, payload) => {
     const { rootId, targets, customTime } = payload;
     const root = ensureRoot(rootId);
@@ -429,7 +501,47 @@ function registerIpc() {
     const { filePath } = payload;
     const ext = path.extname(filePath) || '';
     if (!ext) return [];
-    return getOpenWithApps(ext);
+    const lowerExt = ext.toLowerCase();
+    const apps = await getOpenWithApps(ext);
+    const seen = new Map();
+
+    // default first
+    const ordered = [];
+    for (const app of apps) {
+      if (app.isDefault) {
+        const key = app.command || app.name;
+        if (!seen.has(key)) {
+          seen.set(key, true);
+          ordered.push({ ...app, lastUsed: null });
+        }
+      }
+    }
+
+    // recent next
+    const recents = (recentOpenWith[lowerExt] || []).sort((a, b) => b.lastUsed - a.lastUsed);
+    for (const r of recents) {
+      const key = r.command || r.name;
+      if (seen.has(key)) continue;
+      seen.set(key, true);
+      ordered.push({
+        name: r.name,
+        displayName: r.displayName || r.name,
+        command: r.command,
+        iconPath: r.iconPath,
+        isDefault: false,
+        lastUsed: r.lastUsed || null
+      });
+    }
+
+    // rest
+    for (const app of apps) {
+      const key = app.command || app.name;
+      if (seen.has(key)) continue;
+      seen.set(key, true);
+      ordered.push({ ...app, lastUsed: null });
+    }
+
+    return ordered;
   });
 
   withErrorHandling('fs:get-new-file-types', async () => {
@@ -437,7 +549,7 @@ function registerIpc() {
   });
 
   withErrorHandling('fs:open-with-app', async (_evt, payload) => {
-    const { command, filePath } = payload;
+    const { command, filePath, name, displayName, iconPath } = payload;
     if (!command || !filePath) return false;
     let finalCmd = command;
     if (/%1|%l|%L/i.test(finalCmd)) {
@@ -445,9 +557,11 @@ function registerIpc() {
     } else {
       finalCmd = `${finalCmd} "${filePath}"`;
     }
+    const ext = path.extname(filePath).toLowerCase();
     return new Promise((resolve, reject) => {
       exec(finalCmd, { windowsHide: true }, (err) => {
         if (err) return reject(err);
+        rememberOpenWith(ext, { command, name, displayName, iconPath });
         resolve(true);
       });
     });
@@ -513,9 +627,15 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
+  loadRecentOpenWith();
   createWindow();
-  await startWatchers();
   registerIpc();
+
+  try {
+    await startWatchers();
+  } catch (err) {
+    console.error('startWatchers failed, continuing without watchers', err);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

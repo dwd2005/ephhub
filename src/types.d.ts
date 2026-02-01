@@ -16,6 +16,8 @@ interface OpenWithApp {
   command: string;
   iconPath: string;
   displayName: string;
+  isDefault?: boolean;
+  lastUsed?: number | null;
 }
 
 interface RootItem {
@@ -68,7 +70,7 @@ interface Window {
     list: (payload: { rootId: string; relativePath: string }) => Promise<ApiResult<FileEntry[]>>;
     timeBuckets: (payload: { rootId: string }) => Promise<ApiResult<TimeBucket[]>>;
     createFolder: (payload: { rootId: string; relativePath: string; name: string }) => Promise<ApiResult<string>>;
-    createFile: (payload: { rootId: string; relativePath: string; name: string; templatePath?: string; content?: string }) => Promise<ApiResult<string>>;
+    createFile: (payload: { rootId: string; relativePath: string; name: string; templatePath?: string; content?: string; data?: string }) => Promise<ApiResult<string>>;
     upload: (payload: { rootId: string; relativePath: string; files: string[] }) => Promise<ApiResult<string[]>>;
     pasteFromClipboard: (payload: { rootId: string; relativePath: string }) => Promise<ApiResult<{ from: string; to: string; finalName: string }[]>>;
     getClipboardFiles: () => Promise<ApiResult<string[]>>;
@@ -83,10 +85,11 @@ interface Window {
     setCustomTime: (payload: { rootId: string; targets: string[]; customTime: string | null }) => Promise<ApiResult<boolean>>;
     getOpenWithApps: (payload: { filePath: string }) => Promise<ApiResult<OpenWithApp[]>>;
     getNewFileTypes: () => Promise<ApiResult<NewFileType[]>>;
-    openWithApp: (payload: { command: string; filePath: string }) => Promise<ApiResult<boolean>>;
+    openWithApp: (payload: { command: string; filePath: string; name?: string; displayName?: string; iconPath?: string }) => Promise<ApiResult<boolean>>;
     openWithDialog: (payload: { filePath: string }) => Promise<ApiResult<boolean>>;
     openItem: (payload: { rootId: string; relativePath: string }) => Promise<ApiResult<string>>;
     revealItem: (payload: { rootId: string; relativePath: string }) => Promise<ApiResult<boolean>>;
+    getIcon: (payload: { path: string; size?: 'small' | 'normal' | 'large' }) => Promise<ApiResult<string>>;
     onFsChange: (callback: (payload: { rootId: string; type: string; path: string }) => void) => void;
     onOperationStart: (callback: (payload: OperationStatus) => void) => void;
     onOperationEnd: (callback: (payload: { path: string }) => void) => void;

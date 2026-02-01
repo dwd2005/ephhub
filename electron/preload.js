@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('api', {
   openWithDialog: (payload) => ipcRenderer.invoke('fs:open-with-dialog', payload),
   openItem: (payload) => ipcRenderer.invoke('fs:open', payload),
   revealItem: (payload) => ipcRenderer.invoke('fs:reveal', payload),
+  getIcon: (payload) => ipcRenderer.invoke('fs:get-icon', payload),
 
   onFsChange: (callback) => ipcRenderer.on('fs-change', (_evt, data) => callback(data)),
   onOperationStart: (callback) =>

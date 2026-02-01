@@ -104,7 +104,14 @@ async function createFolder(rootPath, relativePath, name) {
   return dest;
 }
 
-async function createFile(rootPath, relativePath, name, templatePath = null, content = '') {
+async function createFile(
+  rootPath,
+  relativePath,
+  name,
+  templatePath = null,
+  content = '',
+  data = null
+) {
   const target = ensureInsideRoot(rootPath, path.join(rootPath, relativePath, name));
   await fs.ensureDir(path.dirname(target));
   if (await fs.pathExists(target)) {
@@ -117,6 +124,9 @@ async function createFile(rootPath, relativePath, name, templatePath = null, con
       throw new Error('Template file not found');
     }
     await fs.copy(resolvedTemplate, target, { overwrite: false, errorOnExist: true });
+  } else if (data) {
+    const buffer = Buffer.from(data, 'hex');
+    await fs.outputFile(target, buffer);
   } else {
     await fs.outputFile(target, content);
   }

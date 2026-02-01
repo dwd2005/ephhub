@@ -3,4 +3,6 @@ export interface OpenWithApp {
   command: string;
   iconPath: string;
   displayName: string;
+  isDefault?: boolean;
+  lastUsed?: number | null;
 }

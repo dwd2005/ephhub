@@ -1,12 +1,19 @@
 const { exec } = require('child_process');
+const iconv = require('iconv-lite');
 const path = require('path');
 const fs = require('fs');
 
 function execReg(command) {
   return new Promise((resolve, reject) => {
-    exec(command, { windowsHide: true, encoding: 'utf8' }, (err, stdout) => {
+    exec(command, { windowsHide: true, encoding: 'buffer' }, (err, stdout) => {
       if (err) return reject(err);
-      resolve(stdout || '');
+      try {
+        // Windows reg.exe 输出为本地代码页（常见 cp936），这里尝试优先按 cp936 解析
+        const decoded = iconv.decode(stdout, 'cp936');
+        resolve(decoded || '');
+      } catch (e) {
+        resolve(stdout.toString('utf8'));
+      }
     });
   });
 }
@@ -186,7 +193,8 @@ async function getOpenWithApps(ext) {
             name: progId,
             displayName: displayName,
             command,
-            iconPath: icon
+            iconPath: icon,
+            isDefault: true
           });
         }
       })()
@@ -202,9 +210,10 @@ async function getOpenWithApps(ext) {
         if (command && !seen.has(key)) {
           seen.set(key, {
             name: exe,
-            displayName: exe,
+            displayName: await getFriendlyNameForApp(exe),
             command,
-            iconPath: icon
+            iconPath: icon,
+            isDefault: false
           });
         }
       })()
@@ -223,7 +232,8 @@ async function getOpenWithApps(ext) {
             name: pid,
             displayName: displayName,
             command,
-            iconPath: icon
+            iconPath: icon,
+            isDefault: false
           });
         }
       })()
@@ -239,9 +249,10 @@ async function getOpenWithApps(ext) {
         if (command && !seen.has(key)) {
           seen.set(key, {
             name: exe,
-            displayName: exe,
+            displayName: await getFriendlyNameForApp(exe),
             command,
-            iconPath: icon
+            iconPath: icon,
+            isDefault: false
           });
         }
       })()
@@ -259,7 +270,8 @@ async function getOpenWithApps(ext) {
             name: exe,
             displayName: exe,
             command,
-            iconPath: icon
+            iconPath: icon,
+            isDefault: false
           });
         }
       })()
@@ -279,7 +291,8 @@ async function getOpenWithApps(ext) {
             name: appExe,
             displayName: displayName,
             command,
-            iconPath: icon
+            iconPath: icon,
+            isDefault: false
           });
         }
       })()
@@ -299,7 +312,8 @@ async function getOpenWithApps(ext) {
             name: appExe,
             displayName: displayName,
             command,
-            iconPath: icon
+            iconPath: icon,
+            isDefault: false
           });
         }
       })()
@@ -373,18 +387,36 @@ async function getDefaultIcon(ext) {
 }
 
 async function getShellNewTemplate(ext) {
-  try {
-    const res = await execReg(`reg query "HKCR\\${ext}\\ShellNew"`);
-    const lines = res.split(/\r?\n/);
+  const parse = (text) => {
+    const lines = text.split(/\r?\n/);
     for (const line of lines) {
       const m = line.match(/FileName\s+REG_SZ\s+([^\r\n]+)/i);
       if (m) return { templatePath: m[1].trim() };
       const data = line.match(/Data\s+REG_BINARY\s+([0-9A-F ]+)/i);
-      if (data) {
-        return { data: data[1].replace(/\s+/g, '') };
-      }
+      if (data) return { data: data[1].replace(/\s+/g, '') };
+      const nullFile = line.match(/NullFile\s+/i);
+      if (nullFile) return { nullFile: true };
+    }
+    return null;
+  };
+
+  // ext key
+  try {
+    const res = await execReg(`reg query "HKCR\\${ext}\\ShellNew"`);
+    const parsed = parse(res);
+    if (parsed) return parsed;
+  } catch (err) {}
+
+  // progId key
+  try {
+    const progId = await getProgId(ext);
+    if (progId) {
+      const res2 = await execReg(`reg query "HKCR\\${progId}\\ShellNew"`);
+      const parsed2 = parse(res2);
+      if (parsed2) return parsed2;
     }
   } catch (err) {}
+
   return {};
 }
 
@@ -405,9 +437,29 @@ async function getNewFileTypes() {
     // 其他
     '.log', '.csv', '.md'
   ];
-  
+
+  const discovered = await (async () => {
+    try {
+      const output = await execReg('reg query HKCR /f ShellNew /s /k');
+      const lines = output.split(/\r?\n/);
+      const set = new Set();
+      for (const line of lines) {
+        const m = line.match(/HKEY_CLASSES_ROOT\\(\.[^\\]+)\\ShellNew/i);
+        if (m) {
+          const ext = m[1].startsWith('.') ? m[1].toLowerCase() : null;
+          if (ext) set.add(ext);
+        }
+      }
+      return Array.from(set);
+    } catch (err) {
+      return [];
+    }
+  })();
+
+  const extSet = new Set([...commonExts.map((e) => e.toLowerCase()), ...discovered]);
+
   const results = [];
-  for (const ext of commonExts) {
+  for (const ext of Array.from(extSet).sort()) {
     if (!(await hasShellNew(ext))) continue;
     const name = await getFriendlyName(ext);
     const iconPath = await getDefaultIcon(ext);

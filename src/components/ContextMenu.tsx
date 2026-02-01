@@ -16,7 +16,10 @@ const ContextMenu: React.FC<Props> = ({ visible, position, items, onClose }) => 
     <Dropdown
       menu={{
         items,
-        onClick: () => onClose()
+        onClick: (info) => {
+          const shouldClose = (info?.item as any)?.props?.closeOnClick !== false;
+          if (shouldClose) onClose();
+        }
       }}
       open={visible}
       trigger={['contextMenu']}
