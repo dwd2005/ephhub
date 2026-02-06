@@ -1,4 +1,4 @@
-type ApiResult<T> = { ok: true; data: T } | { ok: false; message: string };
+type ApiResult<T> = { ok: true; data: T } | { ok: false; message: string; code?: string };
 
 type LevelTag = 'temp' | 'normal' | 'important' | null;
 

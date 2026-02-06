@@ -22,7 +22,16 @@ async function listDirectory(rootPath, relativePath, db) {
   const entries = [];
   for (const name of names) {
     const fullPath = path.join(resolved, name);
-    const stat = await fs.stat(fullPath);
+    let stat;
+    try {
+      stat = await fs.stat(fullPath);
+    } catch (err) {
+      // 并发变更场景下允许跳过异常条目，避免整体失败
+      if (err && ['ENOENT', 'EPERM', 'EACCES', 'EBUSY'].includes(err.code)) {
+        continue;
+      }
+      throw err;
+    }
     entries.push({
       name,
       fullPath,
@@ -43,12 +52,11 @@ async function listDirectory(rootPath, relativePath, db) {
     entry.customTime = dbInfo.customTime || null;
   });
 
-  await db.upsertFiles(
+  // 仅更新类型和缺失行，避免覆盖自定义元数据
+  await db.upsertFileTypes(
     entries.map((entry) => ({
       physical_path: entry.fullPath,
-      type: entry.type,
-      level_tag: entry.levelTag,
-      custom_time: entry.customTime
+      type: entry.type
     }))
   );
 
@@ -62,8 +70,17 @@ async function buildTimeBuckets(rootPath, db) {
   for (const row of files) {
     let time = row.custom_time ? dayjs(row.custom_time).valueOf() : null;
     if (!time) {
-      const stat = await fs.stat(row.physical_path);
-      time = stat.birthtimeMs;
+      try {
+        const stat = await fs.stat(row.physical_path);
+        time = stat.birthtimeMs;
+      } catch (err) {
+        // 并发删除场景下清理记录并跳过
+        if (err && err.code === 'ENOENT') {
+          await db.deleteRecords([row.physical_path]);
+          continue;
+        }
+        throw err;
+      }
     }
     results.push({
       fullPath: row.physical_path,

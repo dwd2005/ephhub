@@ -5,6 +5,8 @@ const fs = require('fs-extra');
 const { readConfig, writeConfig } = require('./config');
 const { DatabaseManager } = require('./db');
 const { WatcherManager } = require('./watchers');
+const { OperationTracker } = require('./operationTracker');
+const { PathTaskQueue } = require('./pathQueue');
 const fileService = require('./fileService');
 const { getOpenWithApps, getNewFileTypes } = require('./registry');
 const { exec } = require('child_process');
@@ -14,11 +16,20 @@ let mainWindow;
 let config = readConfig();
 const db = new DatabaseManager();
 const operationStatus = new Map();
+// 路径级任务队列：同路径串行，不相关路径并行
+const pathTaskQueue = new PathTaskQueue();
+// 内部操作记录：对齐 watcher 事件并做超时补救
+const operationTracker = new OperationTracker(db, {
+  defaultTimeoutMs: 5000,
+  onTimeout: (err, record) => {
+    console.warn('operation timeout sync failed', err, record);
+  }
+});
 const watcherManager = new WatcherManager(db, (payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('fs-change', payload);
   }
-});
+}, operationTracker);
 
 // --- icon cache & helpers --------------------------------------------------
 const iconCache = new Map(); // key: `${path}|${size}` -> dataURL
@@ -127,7 +138,7 @@ function withErrorHandling(channel, handler) {
       return { ok: true, data: await handler(event, payload) };
     } catch (err) {
       console.error(`[${channel}] failed`, err);
-      return { ok: false, message: err.message || 'Unexpected error' };
+      return { ok: false, message: formatFsError(err), code: err?.code };
     }
   });
 }
@@ -161,6 +172,61 @@ async function runWithStatus(paths, operation, task) {
   } finally {
     paths.forEach((p) => clearOperation(p));
   }
+}
+
+// 根据路径生成关联 key，同一顶层目录串行，不相关目录并行
+function buildPathKey(rootPath, absPath) {
+  const normalizedRoot = path.resolve(rootPath);
+  const normalizedPath = path.resolve(absPath);
+  if (!normalizedPath.startsWith(normalizedRoot)) return normalizedRoot;
+  const relative = path.relative(normalizedRoot, normalizedPath);
+  if (!relative) return normalizedRoot;
+  const first = relative.split(path.sep)[0];
+  return path.join(normalizedRoot, first);
+}
+
+function buildPathKeys(rootPath, absPaths) {
+  const keys = new Set();
+  for (const p of absPaths) {
+    if (!p) continue;
+    keys.add(buildPathKey(rootPath, p));
+  }
+  return [...keys];
+}
+
+// 内部操作记录：用于 watcher 事件匹配与超时补救
+function trackFsOperation(operation, rootPath, paths, options = {}) {
+  operationTracker.track(operation, paths, { rootPath, ...options });
+}
+
+// 路径级队列执行，保证相关路径的前后端顺序一致
+function runWithPathQueue(rootPath, absPaths, task) {
+  const keys = buildPathKeys(rootPath, absPaths);
+  return pathTaskQueue.run(keys, task);
+}
+
+// 统一错误信息，尽量覆盖常见文件系统异常
+function formatFsError(err) {
+  if (!err) return '操作失败';
+  if (err.code) {
+    switch (err.code) {
+      case 'ENOENT':
+        return '文件或目录不存在，可能已被移动或删除';
+      case 'EACCES':
+        return '权限不足，请检查访问权限或以管理员身份运行';
+      case 'EPERM':
+        return '操作被系统拒绝，请检查权限或占用情况';
+      case 'EBUSY':
+        return '文件被占用，请关闭相关程序后重试';
+      case 'ENOTEMPTY':
+        return '目录非空，无法完成操作';
+      case 'EEXIST':
+        return '目标已存在，无法完成操作';
+      default:
+        return `${err.message || '操作失败'} (code: ${err.code})`;
+    }
+  }
+  return err.message || '操作失败';
 }
 
 async function getClipboardFilePaths() {
@@ -271,95 +337,125 @@ function registerIpc() {
   withErrorHandling('fs:create-folder', async (_evt, payload) => {
     const { rootId, relativePath, name } = payload;
     const root = ensureRoot(rootId);
-    const dest = await fileService.createFolder(root.path, relativePath, name);
-    await watcherManager.handleAdd(root, dest, true);
-    return dest;
+    const planned = fileService.ensureInsideRoot(
+      root.path,
+      path.join(root.path, relativePath, name)
+    );
+    return runWithPathQueue(root.path, [planned], async () => {
+      // 记录内部操作，等待 watcher 统一写库
+      trackFsOperation('create-folder', root.path, [planned]);
+      return fileService.createFolder(root.path, relativePath, name);
+    });
   });
 
   withErrorHandling('fs:create-file', async (_evt, payload) => {
     const { rootId, relativePath, name, templatePath, content, data } = payload;
     const root = ensureRoot(rootId);
-    const dest = await fileService.createFile(
+    const planned = fileService.ensureInsideRoot(
       root.path,
-      relativePath,
-      name,
-      templatePath,
-      content,
-      data
+      path.join(root.path, relativePath, name)
     );
-    await watcherManager.handleAdd(root, dest, false);
-    return dest;
+    return runWithPathQueue(root.path, [planned], async () => {
+      // 记录内部操作，等待 watcher 统一写库
+      trackFsOperation('create-file', root.path, [planned]);
+      return fileService.createFile(root.path, relativePath, name, templatePath, content, data);
+    });
   });
 
   withErrorHandling('fs:upload', async (_evt, payload) => {
     const { rootId, relativePath, files } = payload;
     const root = ensureRoot(rootId);
     const destPaths = files.map((file) => path.join(root.path, relativePath, path.basename(file)));
-    return runWithStatus(destPaths, 'upload', async () => {
-      const created = await fileService.uploadFiles(root.path, relativePath, files);
-      await Promise.all(created.map((full) => watcherManager.handleAdd(root, full, false)));
-      return created;
-    });
+    return runWithPathQueue(root.path, destPaths, async () =>
+      runWithStatus(destPaths, 'upload', async () => {
+        // 记录内部操作，等待 watcher 统一写库
+        trackFsOperation('upload', root.path, destPaths);
+        const created = await fileService.uploadFiles(root.path, relativePath, files);
+        return created;
+      })
+    );
   });
 
   withErrorHandling('fs:rename', async (_evt, payload) => {
     const { rootId, relativePath, name } = payload;
     const root = ensureRoot(rootId);
     const original = path.join(root.path, relativePath);
-    return runWithStatus([original], 'rename', async () => {
-      const prevInfo = (await db.getInfo([original]))[original] || {};
-      const target = await fileService.renameEntry(root.path, relativePath, name);
-      await watcherManager.handleAdd(root, target, false, {
-        level_tag: prevInfo.levelTag ?? null,
-        custom_time: prevInfo.customTime ?? null
-      });
-      await db.deleteRecords([original]);
-      return target;
-    });
+    const target = path.join(path.dirname(original), name);
+    return runWithPathQueue(root.path, [original, target], async () =>
+      runWithStatus([original], 'rename', async () => {
+        const prevInfo = (await db.getInfo([original]))[original] || {};
+        // 记录旧路径与新路径，保证 watcher 写入时携带旧元数据
+        trackFsOperation('rename', root.path, [original, target], {
+          metaByPath: {
+            [target]: {
+              level_tag: prevInfo.levelTag ?? null,
+              custom_time: prevInfo.customTime ?? null
+            }
+          }
+        });
+        const renamed = await fileService.renameEntry(root.path, relativePath, name);
+        // 关键操作完成后立即同步，避免元数据短暂丢失
+        await operationTracker.syncNow([original, target]);
+        return renamed;
+      })
+    );
   });
 
   withErrorHandling('fs:delete', async (_evt, payload) => {
     const { rootId, targets } = payload;
     const root = ensureRoot(rootId);
     const absTargets = targets.map((rel) => path.join(root.path, rel));
-    return runWithStatus(absTargets, 'delete', async () => {
-      const deleted = await fileService.deleteEntries(root.path, targets);
-      for (const rel of targets) {
-        await watcherManager.handleDelete(root, path.join(root.path, rel));
-      }
-      return deleted;
-    });
+    return runWithPathQueue(root.path, absTargets, async () =>
+      runWithStatus(absTargets, 'delete', async () => {
+        // 记录内部操作，等待 watcher 统一写库
+        trackFsOperation('delete', root.path, absTargets);
+        const deleted = await fileService.deleteEntries(root.path, targets);
+        return deleted;
+      })
+    );
   });
 
   withErrorHandling('fs:move', async (_evt, payload) => {
     const { rootId, targets, destination } = payload;
     const root = ensureRoot(rootId);
     const absTargets = targets.map((rel) => path.join(root.path, rel));
-    return runWithStatus(absTargets, 'move', async () => {
-      const moved = await fileService.moveEntries(root.path, targets, destination);
-      const infoMap = await db.getInfo(absTargets);
-      await db.deleteRecords(absTargets);
-      await Promise.all(
-        moved.map(({ to }, idx) =>
-          watcherManager.handleAdd(root, to, false, {
+    const destAbs = targets.map((rel) =>
+      path.join(root.path, destination, path.basename(rel))
+    );
+    return runWithPathQueue(root.path, [...absTargets, ...destAbs], async () =>
+      runWithStatus(absTargets, 'move', async () => {
+        const infoMap = await db.getInfo(absTargets);
+        const metaByPath = {};
+        destAbs.forEach((destPath, idx) => {
+          metaByPath[destPath] = {
             level_tag: infoMap[absTargets[idx]]?.levelTag ?? null,
             custom_time: infoMap[absTargets[idx]]?.customTime ?? null
-          })
-        )
-      );
-      return moved;
-    });
+          };
+        });
+        // 记录旧路径与新路径，保证 watcher 写入时携带旧元数据
+        trackFsOperation('move', root.path, [...absTargets, ...destAbs], { metaByPath });
+        const moved = await fileService.moveEntries(root.path, targets, destination);
+        // 关键操作完成后立即同步，避免元数据短暂丢失
+        await operationTracker.syncNow([...absTargets, ...destAbs]);
+        return moved;
+      })
+    );
   });
 
   withErrorHandling('fs:copy', async (_evt, payload) => {
     const { rootId, targets, destination } = payload;
     const root = ensureRoot(rootId);
     const absTargets = targets.map((rel) => path.join(root.path, rel));
-    return runWithStatus(absTargets, 'copy', async () => {
-      const copied = await fileService.copyEntries(root.path, targets, destination);
-      await Promise.all(copied.map(({ to }) => watcherManager.handleAdd(root, to, false)));
-      return copied;
-    });
+    const destBase = path.join(root.path, destination);
+    const plannedTargets = targets.map((rel) => path.join(destBase, path.basename(rel)));
+    return runWithPathQueue(root.path, [...absTargets, destBase], async () =>
+      runWithStatus(absTargets, 'copy', async () => {
+        // 记录内部操作，实际目标若重命名将由 watcher 直接处理
+        trackFsOperation('copy', root.path, plannedTargets);
+        const copied = await fileService.copyEntries(root.path, targets, destination);
+        return copied;
+      })
+    );
   });
 
   withErrorHandling('clipboard:get-files', async () => {
@@ -375,15 +471,19 @@ function registerIpc() {
     const plannedTargets = sources.map((src) =>
       path.join(root.path, relativePath || '.', path.basename(src))
     );
-    return runWithStatus(plannedTargets, 'copy', async () => {
-      const copied = await fileService.importExternalEntries(
-        root.path,
-        relativePath || '.',
-        sources
-      );
-      await Promise.all(copied.map(({ to }) => watcherManager.handleAdd(root, to, false)));
-      return copied;
-    });
+    const destBase = path.join(root.path, relativePath || '.');
+    return runWithPathQueue(root.path, [...plannedTargets, destBase], async () =>
+      runWithStatus(plannedTargets, 'copy', async () => {
+        // 记录内部操作，实际目标若重命名将由 watcher 直接处理
+        trackFsOperation('paste', root.path, plannedTargets);
+        const copied = await fileService.importExternalEntries(
+          root.path,
+          relativePath || '.',
+          sources
+        );
+        return copied;
+      })
+    );
   });
 
   withErrorHandling('fs:import-external', async (_evt, payload) => {
@@ -402,15 +502,19 @@ function registerIpc() {
     const planned = validSources.map((src) =>
       path.join(root.path, relativePath || '.', path.basename(src))
     );
-    return runWithStatus(planned, 'copy', async () => {
-      const copied = await fileService.importExternalEntries(
-        root.path,
-        relativePath || '.',
-        validSources
-      );
-      await Promise.all(copied.map(({ to }) => watcherManager.handleAdd(root, to, false)));
-      return copied;
-    });
+    const destBase = path.join(root.path, relativePath || '.');
+    return runWithPathQueue(root.path, [...planned, destBase], async () =>
+      runWithStatus(planned, 'copy', async () => {
+        // 记录内部操作，实际目标若重命名将由 watcher 直接处理
+        trackFsOperation('import-external', root.path, planned);
+        const copied = await fileService.importExternalEntries(
+          root.path,
+          relativePath || '.',
+          validSources
+        );
+        return copied;
+      })
+    );
   });
 
   withErrorHandling('fs:clean-temp', async (_evt, payload) => {
@@ -434,8 +538,9 @@ function registerIpc() {
 
       if (stat.isFile()) {
         if (level === 'temp') {
+          // 记录内部删除操作，等待 watcher 统一写库
+          trackFsOperation('clean-temp', root.path, [absPath]);
           await shell.trashItem(absPath);
-          await watcherManager.handleDelete(root, absPath);
           return { hasNonTemp: false };
         }
         return { hasNonTemp: true };
@@ -452,8 +557,9 @@ function registerIpc() {
 
       const isTempDir = level === 'temp';
       if (isTempDir && !hasNonTempChild) {
+        // 记录内部删除操作，等待 watcher 统一写库
+        trackFsOperation('clean-temp', root.path, [absPath]);
         await shell.trashItem(absPath);
-        await watcherManager.handleDelete(root, absPath);
         return { hasNonTemp: false };
       }
 
@@ -461,12 +567,14 @@ function registerIpc() {
       return { hasNonTemp: true };
     };
 
-    return runWithStatus(absList, 'delete', async () => {
-      for (const abs of absList) {
-        await cleanNode(abs);
-      }
-      return true;
-    });
+    return runWithPathQueue(root.path, absList, async () =>
+      runWithStatus(absList, 'delete', async () => {
+        for (const abs of absList) {
+          await cleanNode(abs);
+        }
+        return true;
+      })
+    );
   });
 
   withErrorHandling('fs:delete-by-level', async (_evt, payload) => {
@@ -475,14 +583,14 @@ function registerIpc() {
     const rows = await db.listByLevel(root.path, levelTag);
     const rels = rows.map((r) => fileService.toRelative(root.path, r.physical_path));
     const absTargets = rows.map((r) => r.physical_path);
-    return runWithStatus(absTargets, 'delete', async () => {
-      const deleted = await fileService.deleteEntries(root.path, rels);
-      await db.deleteRecords(absTargets);
-      for (const rel of rels) {
-        await watcherManager.handleDelete(root, path.join(root.path, rel));
-      }
-      return deleted;
-    });
+    return runWithPathQueue(root.path, absTargets, async () =>
+      runWithStatus(absTargets, 'delete', async () => {
+        // 记录内部删除操作，等待 watcher 统一写库
+        trackFsOperation('delete-by-level', root.path, absTargets);
+        const deleted = await fileService.deleteEntries(root.path, rels);
+        return deleted;
+      })
+    );
   });
 
   withErrorHandling('fs:set-level', async (_evt, payload) => {

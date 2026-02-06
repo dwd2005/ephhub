@@ -22,6 +22,37 @@ class DatabaseManager {
     await this.run(`CREATE INDEX IF NOT EXISTS idx_files_level ON files(level_tag);`);
   }
 
+  // 事务控制：用于多步写入时保证原子性
+  async beginTransaction() {
+    await this.run('BEGIN IMMEDIATE;');
+  }
+
+  async commitTransaction() {
+    await this.run('COMMIT;');
+  }
+
+  async rollbackTransaction() {
+    await this.run('ROLLBACK;');
+  }
+
+  // 事务包装：失败自动回滚
+  async runInTransaction(task) {
+    await this.beginTransaction();
+    try {
+      const result = await task();
+      await this.commitTransaction();
+      return result;
+    } catch (err) {
+      try {
+        await this.rollbackTransaction();
+      } catch (rollbackErr) {
+        // 回滚失败也不覆盖原始错误
+        console.warn('DB rollback failed', rollbackErr);
+      }
+      throw err;
+    }
+  }
+
   run(sql, params = []) {
     return new Promise((resolve, reject) => {
       this.db.run(sql, params, function (err) {
@@ -51,9 +82,38 @@ class DatabaseManager {
         level_tag=COALESCE(excluded.level_tag, files.level_tag),
         custom_time=COALESCE(excluded.custom_time, files.custom_time)
     `;
-    for (const row of records) {
-      await this.run(sql, [row.physical_path, row.type, row.level_tag, row.custom_time]);
+    const task = async () => {
+      for (const row of records) {
+        await this.run(sql, [row.physical_path, row.type, row.level_tag, row.custom_time]);
+      }
+    };
+    if (records.length > 1) {
+      await this.runInTransaction(task);
+      return;
     }
+    await task();
+  }
+
+  // 仅更新文件类型与缺失行，避免覆盖自定义元数据
+  async upsertFileTypes(records) {
+    if (!records.length) return;
+    await this.ready;
+    const sql = `
+      INSERT INTO files(physical_path, type)
+      VALUES (?, ?)
+      ON CONFLICT(physical_path) DO UPDATE SET
+        type=excluded.type
+    `;
+    const task = async () => {
+      for (const row of records) {
+        await this.run(sql, [row.physical_path, row.type]);
+      }
+    };
+    if (records.length > 1) {
+      await this.runInTransaction(task);
+      return;
+    }
+    await task();
   }
 
   async getInfo(paths) {
@@ -82,9 +142,16 @@ class DatabaseManager {
       VALUES (?, NULL, ?, NULL)
       ON CONFLICT(physical_path) DO UPDATE SET level_tag=excluded.level_tag
     `;
-    for (const path of targets) {
-      await this.run(sql, [path, levelTag]);
+    const task = async () => {
+      for (const path of targets) {
+        await this.run(sql, [path, levelTag]);
+      }
+    };
+    if (targets.length > 1) {
+      await this.runInTransaction(task);
+      return;
     }
+    await task();
   }
 
   async setCustomTime(targets, customTime) {
@@ -95,9 +162,16 @@ class DatabaseManager {
       VALUES (?, NULL, NULL, ?)
       ON CONFLICT(physical_path) DO UPDATE SET custom_time=excluded.custom_time
     `;
-    for (const path of targets) {
-      await this.run(sql, [path, customTime]);
+    const task = async () => {
+      for (const path of targets) {
+        await this.run(sql, [path, customTime]);
+      }
+    };
+    if (targets.length > 1) {
+      await this.runInTransaction(task);
+      return;
     }
+    await task();
   }
 
   async deleteRecords(paths) {

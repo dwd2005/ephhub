@@ -1,46 +1,22 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App as AntApp, Input, Modal, Space, DatePicker } from 'antd';
-import type { MenuProps } from 'antd';
-import {
-  AppstoreOutlined,
-  CopyOutlined,
-  EditOutlined,
-  FieldTimeOutlined,
-  FileAddOutlined,
-  FileTextOutlined,
-  FolderAddOutlined,
-  FolderOpenOutlined,
-  DeleteOutlined,
-  ScissorOutlined,
-  SnippetsOutlined,
-  TagOutlined
-} from '@ant-design/icons';
-import dayjs, { Dayjs } from 'dayjs';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Space } from 'antd';
+import { FolderOpenOutlined } from '@ant-design/icons';
 import { useStore } from '@/store/useStore';
 import SideBar from '@/components/SideBar';
 import MessageHub from '@/components/MessageHub';
 import ContextMenu from '@/components/ContextMenu';
-import { useApiHelpers } from './hooks/useApiHelpers';
-import { useIcon } from './hooks/useIcon';
 import TopBar from './components/TopBar';
 import PathSearchBar from './components/PathSearchBar';
 import ActionRibbon from './components/ActionRibbon';
 import FileDisplay from './components/FileDisplay';
+import { useApiHelpers } from './hooks/useApiHelpers';
+import { useFileOperations } from './hooks/useFileOperations';
+import { useSelectionBox } from './hooks/useSelectionBox';
+import { usePathNavigation } from './hooks/usePathNavigation';
+import { useContextMenus } from './hooks/useContextMenus';
+import { useFileBrowserLifecycle } from './hooks/useFileBrowserLifecycle';
 import type { NewFileType } from '@/types/newFile';
 import './file-browser.css';
-
-const AppIcon: React.FC<{ path?: string; size?: 'small' | 'normal' }> = ({
-  path,
-  size = 'small'
-}) => {
-  const icon = useIcon(path || '', size);
-  const pixel = size === 'normal' ? 32 : 18;
-  if (icon) {
-    return <img src={icon} width={pixel} height={pixel} style={{ objectFit: 'contain' }} />;
-  }
-  return <AppstoreOutlined />;
-};
-
 
 const levelTagOptions: { key: LevelTag; label: string }[] = [
   { key: 'important', label: '重要' },
@@ -60,6 +36,28 @@ const parentPathOf = (p: string) => {
 };
 
 const FileBrowser: React.FC = () => {
+  const [sidebarWidth, setSidebarWidth] = useState(250);
+  const isResizing = useRef(false);
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizing.current = true;
+    document.addEventListener('mousemove', handleResize);
+    document.addEventListener('mouseup', handleResizeEnd);
+  };
+
+  const handleResize = (e: MouseEvent) => {
+    if (isResizing.current) {
+      setSidebarWidth(e.clientX);
+    }
+  };
+
+  const handleResizeEnd = () => {
+    isResizing.current = false;
+    document.removeEventListener('mousemove', handleResize);
+    document.removeEventListener('mouseup', handleResizeEnd);
+  };
+
   const {
     roots,
     setRoots,
@@ -76,7 +74,6 @@ const FileBrowser: React.FC = () => {
     selected,
     setSelected,
     selectSingle,
-    toggleSelect,
     clearSelection,
     addMessage,
     setTimeBuckets,
@@ -90,145 +87,59 @@ const FileBrowser: React.FC = () => {
     updateTab,
     renamingPath,
     setRenamingPath,
-    selectionBox,
-    setSelectionBox,
-    isDragging,
-    setIsDragging,
     clipboard,
     setClipboard,
     reorderTabs
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<string>('');
-  const { message, modal } = AntApp.useApp();
-  const { handle } = useApiHelpers();
   const [loading, setLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [pathInputMode, setPathInputMode] = useState(false);
-  const [pathInputValue, setPathInputValue] = useState('');
-  const pathInputRef = useRef<any>(null);
   const fileAreaRef = useRef<HTMLDivElement>(null);
   const fileRefs = useRef<Record<string, HTMLDivElement>>({});
-  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
-  const [openWithApps, setOpenWithApps] = useState<OpenWithApp[]>([]);
-  const [openWithLoading, setOpenWithLoading] = useState(false);
-  const [openWithExpanded, setOpenWithExpanded] = useState(false);
   const [newFileTypes, setNewFileTypes] = useState<NewFileType[]>([]);
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
-  const [menuState, setMenuState] = useState<{
-    visible: boolean;
-    position: { x: number; y: number };
-    type: 'single-file' | 'multi-file' | 'blank';
-    target?: FileEntry | null;
-  }>({ visible: false, position: { x: 0, y: 0 }, type: 'blank', target: null });
+  const { handle } = useApiHelpers();
 
-  const closeContextMenu = () => setMenuState((prev) => ({ ...prev, visible: false }));
+  const deriveTitle = useCallback(
+    (rootId: string | null, path: string) => {
+      const root = roots.find((r) => r.id === rootId);
+      if (!path || path === '.') return root?.name || '未命名';
+      const parts = path.split(/[\\/]/).filter(Boolean);
+      return parts[parts.length - 1] || root?.name || '未命名';
+    },
+    [roots]
+  );
 
-  const deriveTitle = (rootId: string | null, path: string) => {
-    const root = roots.find((r) => r.id === rootId);
-    if (!path || path === '.') return root?.name || '未命名';
-    const parts = path.split(/[\\/]/).filter(Boolean);
-    return parts[parts.length - 1] || root?.name || '未命名';
-  };
+  const {
+    breadcrumb,
+    pathInputMode,
+    setPathInputMode,
+    pathInputValue,
+    setPathInputValue,
+    pathInputRef,
+    handleBreadcrumbClick,
+    handlePathInputSubmit,
+    handlePathInputKeyDown,
+    handlePathInputFocus,
+    handleGoBack
+  } = usePathNavigation(roots, currentRootId, currentPath, setCurrentPath);
 
-  useEffect(() => {
-    if (currentRootId) {
-      refresh();
-    }
-  }, [currentRootId, currentPath, viewMode]);
-
-  useEffect(() => {
-    clearSelection();
-  }, [currentPath, viewMode, currentRootId]);
-
-  useEffect(() => {
-    if (!activeTab && tabs.length) {
-      setActiveTab(tabs[0].id);
-    } else if (activeTab && !tabs.find((t) => t.id === activeTab) && tabs.length) {
-      setActiveTab(tabs[tabs.length - 1].id);
-    }
-  }, [tabs, activeTab]);
-
-  useEffect(() => {
-    if (!activeTab) return;
-    const title = deriveTitle(currentRootId, currentPath);
-    updateTab(activeTab, { path: currentPath, rootId: currentRootId || undefined, title });
-  }, [currentPath, currentRootId, activeTab, updateTab]);
-
-  useEffect(() => {
-    const handleGlobalClick = () => closeContextMenu();
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        closeContextMenu();
-      }
-    };
-    window.addEventListener('click', handleGlobalClick);
-    window.addEventListener('keydown', handleEsc);
-    return () => {
-      window.removeEventListener('click', handleGlobalClick);
-      window.removeEventListener('keydown', handleEsc);
-    };
-  }, []);
-
-  useEffect(() => {
-    const fetchOpenWith = async () => {
-      if (!menuState.visible || menuState.type !== 'single-file' || !menuState.target) return;
-      setOpenWithLoading(true);
-      try {
-        const apps = await handle(
-          window.api.getOpenWithApps({ filePath: menuState.target.fullPath })
-        );
-        setOpenWithApps(apps);
-      } catch (err) {
-        setOpenWithApps([]);
-      } finally {
-        setOpenWithLoading(false);
-      }
-    };
-    fetchOpenWith();
-  }, [menuState.visible, menuState.type, menuState.target, handle]);
-
-  useEffect(() => {
-    if (!menuState.visible) {
-      setOpenWithExpanded(false);
-    }
-  }, [menuState.visible]);
-
-  useEffect(() => {
-    const loadNewFileTypes = async () => {
-      try {
-        const list = await handle(window.api.getNewFileTypes());
-        setNewFileTypes(list);
-      } catch (err) {
-        setNewFileTypes([]);
-      }
-    };
-    loadNewFileTypes();
-  }, [handle]);
-
-  const bootstrap = async () => {
-    const config = await handle(window.api.getConfig());
-    setRoots(config.roots, config.lastRootId);
-    if (config.roots.length && !useStore.getState().tabs.length) {
-      const initialRoot = config.lastRootId || config.roots[0].id;
-      addTab({ rootId: initialRoot, path: '.', title: deriveTitle(initialRoot, '.') });
-      const latest = useStore.getState().tabs.slice(-1)[0];
-      if (latest) setActiveTab(latest.id);
-    }
-  };
-
-  const refresh = React.useCallback(async () => {
+  const refresh = useCallback(async () => {
     const state = useStore.getState();
     if (!state.currentRootId) return;
     setLoading(true);
     try {
       if (state.viewMode === 'physical') {
         const list = await handle(
-          window.api.list({ rootId: state.currentRootId, relativePath: state.currentPath })
+          window.api.list({ rootId: state.currentRootId, relativePath: state.currentPath }),
+          { onRetry: refresh }
         );
         setFiles(list);
       } else {
-        const buckets = await handle(window.api.timeBuckets({ rootId: state.currentRootId }));
+        const buckets = await handle(window.api.timeBuckets({ rootId: state.currentRootId }), {
+          onRetry: refresh
+        });
         setTimeBuckets(buckets);
       }
     } finally {
@@ -236,7 +147,7 @@ const FileBrowser: React.FC = () => {
     }
   }, [handle, setFiles, setTimeBuckets]);
 
-  const applyFsChange = React.useCallback(
+  const applyFsChange = useCallback(
     async (payload: { rootId: string; type: 'add' | 'delete' | 'change'; path: string }) => {
       const state = useStore.getState();
       if (!state.currentRootId || payload.rootId !== state.currentRootId) return;
@@ -261,14 +172,12 @@ const FileBrowser: React.FC = () => {
         const target = list.find((f) => isSamePath(f.relativePath, payload.path));
         if (!target) return;
 
-        // keep untouched items as-is; only swap/insert the changed one
         setFiles((prev) => {
           const exists = prev.some((f) => isSamePath(f.relativePath, target.relativePath));
           if (exists) {
             return prev.map((f) => (isSamePath(f.relativePath, target.relativePath) ? target : f));
           }
 
-          // follow backend ordering to minimise diff
           const orderMap = list.reduce<Record<string, number>>((acc, f, idx) => {
             acc[normalizeRelPath(f.relativePath)] = idx;
             return acc;
@@ -281,530 +190,91 @@ const FileBrowser: React.FC = () => {
           );
         });
       } catch (err) {
-        // fallback to full refresh if incremental update fails
         refresh();
       }
     },
     [handle, refresh, setFiles, setSelected]
   );
 
+  const {
+    openAddRoot,
+    handleNewFolder,
+    handleRemoveRoot,
+    handleDelete,
+    handleMoveOrCopy,
+    handleCopyOrCut,
+    handlePaste,
+    handleSetLevel,
+    handleSetLevelForPaths,
+    clearTemp,
+    handleCleanTemp,
+    handleSetCustomTime,
+    onOpen,
+    handleRenameSubmit,
+    promptNewFile
+  } = useFileOperations({ roots, currentRootId, currentPath, setCurrentPath, viewMode, refresh });
+
+  const { selectionBox, handleMouseDown, handleMouseMove, handleMouseUp } = useSelectionBox(
+    fileAreaRef,
+    fileRefs
+  );
+
+  const {
+    menuState,
+    closeContextMenu,
+    menuItems,
+    handleFileContextMenu,
+    handleBlankContextMenu
+  } = useContextMenus({
+    currentRootId,
+    selected,
+    onOpen,
+    handleCopyOrCut,
+    handlePaste,
+    handleCleanTemp,
+    handleSetCustomTime,
+    handleSetLevelForPaths,
+    setRenamingPath,
+    handleNewFolder,
+    promptNewFile,
+    newFileTypes,
+    handleCleanTempRoot: () => handleCleanTemp()
+  });
+
+  useFileBrowserLifecycle({
+    currentRootId,
+    currentPath,
+    viewMode,
+    refresh,
+    clearSelection,
+    tabs,
+    activeTab,
+    setActiveTab,
+    updateTab,
+    deriveTitle,
+    setRoots,
+    addTab,
+    setCurrentRootId,
+    setCurrentPath,
+    applyFsChange,
+    setTreeRefreshKey,
+    closeContextMenu,
+    setOperation,
+    clearOperation,
+    handle
+  });
+
   useEffect(() => {
-    bootstrap();
-    window.api.onFsChange((payload) => {
-      applyFsChange(payload);
-      setTreeRefreshKey((v) => v + 1);
-    });
-    window.api.onOperationStart((payload) => setOperation(payload));
-    window.api.onOperationEnd((payload) => clearOperation(payload.path));
-  }, [applyFsChange, clearOperation, setOperation]);
-
-  const openAddRoot = async () => {
-    const picked = await handle<string | null>(window.api.chooseRoot());
-    if (!picked) return;
-    const name = picked.split(/[\\/]/).pop() || picked;
-    const newRoot = await handle(window.api.addRoot({ name, path: picked }));
-    setRoots([...roots, newRoot], newRoot.id);
-  };
-
-  const handleNewFolder = () => {
-    let inputRef: any = null;
-    modal.confirm({
-      title: '新建文件夹',
-      content: <Input placeholder="文件夹名称" ref={(ref) => (inputRef = ref)} />,
-      onOk: async () => {
-        const value = inputRef?.input?.value?.trim();
-        if (!value) return Promise.reject();
-        await handle(
-          window.api.createFolder({
-            rootId: currentRootId!,
-            relativePath: currentPath,
-            name: value
-          })
-        );
-        refresh();
-      }
-    });
-  };
-
-  const handleRemoveRoot = (id: string) => {
-    if (!roots.find((r) => r.id === id)) return;
-    modal.confirm({
-      title: '移除根目录',
-      content: '只会移除列表与元数据，不会删除磁盘文件，确认移除该根目录吗？',
-      okType: 'danger',
-      onOk: async () => {
-        await handle(window.api.removeRoot({ id }));
-        const nextRoots = roots.filter((r) => r.id !== id);
-        setRoots(nextRoots, nextRoots[0]?.id || null);
-
-        // 关闭属于该根目录的标签页
-        useStore.getState().tabs
-          .filter((t) => t.rootId === id)
-          .forEach((t) => closeTab(t.id));
-
-        // 清空当前路径和选择
-        clearSelection();
-        setCurrentPath('.');
-      }
-    });
-  };
-
-  const handleDelete = async () => {
-    if (!selected.length) return message.info('请选择文件');
-    await handle(window.api.delete({ rootId: currentRootId!, targets: selected }));
-    clearSelection();
-    refresh();
-  };
-
-  const handleMoveOrCopy = (mode: 'move' | 'copy') => {
-    if (!selected.length) return message.info('请选择文件');
-    let destRef: any = null;
-    modal.confirm({
-      title: mode === 'move' ? '移动到' : '复制到',
-      content: (
-        <Input
-          placeholder="目标路径，例如 . 或 images"
-          defaultValue="."
-          ref={(ref) => (destRef = ref)}
-        />
-      ),
-      onOk: async () => {
-        const value = destRef?.input?.value?.trim() || '.';
-        if (mode === 'move') {
-          await handle(
-            window.api.move({
-              rootId: currentRootId!,
-              targets: selected,
-              destination: value
-            })
-          );
-        } else {
-          await handle(
-            window.api.copy({
-              rootId: currentRootId!,
-              targets: selected,
-              destination: value
-            })
-          );
-        }
-        clearSelection();
-        refresh();
-      }
-    });
-  };
-
-  const handleCopyOrCut = (mode: 'copy' | 'cut', paths?: string[]) => {
-    if (!currentRootId) {
-      message.info('请先选择根目录');
-      return;
-    }
-    const targets = paths ?? selected;
-    if (!targets.length) return message.info('请先选择文件');
-    setClipboard({ mode, rootId: currentRootId, paths: targets });
-    closeContextMenu();
-    message.success(mode === 'copy' ? '已加入复制队列' : '已加入剪切队列');
-  };
-
-  const handlePaste = async () => {
-    closeContextMenu();
-    if (!currentRootId) return message.info('请先选择根目录');
-    if (clipboard) {
-      if (clipboard.rootId !== currentRootId) {
-        return message.warning('只能在同一根目录中粘贴');
-      }
+    const loadNewFileTypes = async () => {
       try {
-        if (clipboard.mode === 'copy') {
-          await handle(
-            window.api.copy({
-              rootId: currentRootId,
-              targets: clipboard.paths,
-              destination: currentPath
-            })
-          );
-          message.success('粘贴完成');
-        } else {
-          await handle(
-            window.api.move({
-              rootId: currentRootId,
-              targets: clipboard.paths,
-              destination: currentPath
-            })
-          );
-          setClipboard(null);
-          message.success('移动完成');
-        }
-        clearSelection();
-        refresh();
-        return;
-      } catch (err) {}
-    }
-
-    // 支持从操作系统剪贴板粘贴文件/文件夹
-    try {
-      const external = await handle<string[]>(window.api.getClipboardFiles());
-      if (!external?.length) return message.info('剪贴板中没有可粘贴的文件');
-      await handle(
-        window.api.pasteFromClipboard({ rootId: currentRootId, relativePath: currentPath })
-      );
-      message.success('粘贴完成');
-      clearSelection();
-      refresh();
-    } catch (err) {}
-  };
-
-  const handleFileContextMenu = (e: React.MouseEvent, file: FileEntry) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const alreadySelected = selected.includes(file.relativePath);
-    if (!alreadySelected) {
-      selectSingle(file.relativePath);
-    }
-    const selectionSize = alreadySelected ? selected.length : 1;
-    setMenuState({
-      visible: true,
-      position: { x: e.clientX, y: e.clientY },
-      type: selectionSize > 1 ? 'multi-file' : 'single-file',
-      target: file
-    });
-  };
-
-  const handleBlankContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    clearSelection();
-    setMenuState({
-      visible: true,
-      position: { x: e.clientX, y: e.clientY },
-      type: 'blank',
-      target: null
-    });
-  };
-
-  const promptNewFile = (options: {
-    ext: string;
-    placeholder: string;
-    templatePath?: string | null;
-    data?: string | null;
-  }) => {
-    closeContextMenu();
-    let inputRef: any = null;
-    modal.confirm({
-      title: `新建${options.placeholder}`,
-      content: (
-        <Input
-          defaultValue={`新建${options.placeholder}${options.ext}`}
-          ref={(ref) => (inputRef = ref)}
-          placeholder="请输入文件名"
-        />
-      ),
-      onOk: async () => {
-        const value = inputRef?.input?.value?.trim();
-        if (!value) return Promise.reject();
-        const finalName = value.endsWith(options.ext) ? value : `${value}${options.ext}`;
-        await handle(
-          window.api.createFile({
-            rootId: currentRootId!,
-            relativePath: currentPath,
-            name: finalName,
-            content: '',
-            templatePath: options.templatePath || undefined,
-            data: options.data || undefined
-          })
-        );
-        refresh();
-      }
-    });
-  };
-
-  const handleSetLevel = (level: LevelTag) => {
-    if (!selected.length) return message.info('请选择文件');
-    handleSetLevelForPaths(level, selected);
-  };
-
-  const handleSetLevelForPaths = (level: LevelTag, targets: string[]) => {
-    if (!currentRootId) {
-      message.info('请先选择根目录');
-      return;
-    }
-    if (!targets.length) return;
-    window.api
-      .setLevel({ rootId: currentRootId!, targets, levelTag: level })
-      .then((res) => {
-        if (!res.ok) {
-          message.error(res.message || '操作失败');
-        } else {
-          addMessage({
-            type: 'success',
-            title: '标签更新',
-            message: '标签设置成功'
-          });
-          refresh();
-        }
-      });
-  };
-
-  const clearTemp = async () => {
-    if (!currentRootId) return;
-    const confirmed = await new Promise<boolean>((resolve) => {
-      modal.confirm({
-        title: '清空“临时”等级文件',
-        content: '将删除所有标记为“临时”的文件/文件夹并移入回收站，确认继续吗？',
-        onOk: () => resolve(true),
-        onCancel: () => resolve(false)
-      });
-    });
-    if (!confirmed) return;
-    await handle(window.api.deleteByLevel({ rootId: currentRootId, levelTag: 'temp' }));
-    refresh();
-  };
-
-  const handleCleanTemp = async (paths?: string[]) => {
-    if (!currentRootId) return message.info('请先选择根目录');
-    await handle(
-      window.api.cleanTemp({
-        rootId: currentRootId,
-        targets: paths && paths.length ? paths : undefined,
-        basePath: currentPath
-      })
-    );
-    message.success('临时内容已清理');
-    refresh();
-  };
-
-  const handleSetCustomTime = (targets: string[]) => {
-    if (!currentRootId) {
-      message.info('请先选择根目录');
-      return;
-    }
-    if (!targets.length) return;
-    let picked: Dayjs | null = dayjs();
-    modal.confirm({
-      title: '设置自定义时间',
-      content: (
-        <DatePicker
-          showTime
-          defaultValue={picked}
-          style={{ width: '100%' }}
-          onChange={(val) => {
-            picked = val;
-          }}
-        />
-      ),
-      onOk: async () => {
-        if (!picked) return Promise.reject();
-        await handle(
-          window.api.setCustomTime({
-            rootId: currentRootId!,
-            targets,
-            customTime: picked.toISOString()
-          })
-        );
-        refresh();
-      }
-    });
-  };
-
-  const onOpen = async (file: FileEntry) => {
-    if (file.isDirectory) {
-      setCurrentPath(file.relativePath);
-    } else {
-      await window.api.openItem({ rootId: currentRootId!, relativePath: file.relativePath });
-    }
-  };
-
-  const handleBreadcrumbClick = (path: string) => {
-    setCurrentPath(path);
-  };
-
-  const handlePathInputSubmit = () => {
-    const inputPath = pathInputValue.trim();
-    if (!inputPath) {
-      setPathInputMode(false);
-      return;
-    }
-
-    const root = roots.find((r) => r.id === currentRootId);
-    if (!root) {
-      setPathInputMode(false);
-      return;
-    }
-
-    let relativePath = inputPath;
-    if (inputPath.startsWith(root.path)) {
-      relativePath = inputPath.slice(root.path.length).replace(/^[\\/]/, '');
-      if (relativePath === '') {
-        relativePath = '.';
-      }
-    }
-
-    setCurrentPath(relativePath);
-    setPathInputMode(false);
-  };
-
-  const handlePathInputKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handlePathInputSubmit();
-    } else if (e.key === 'Escape') {
-      setPathInputMode(false);
-    }
-  };
-
-  const handlePathInputFocus = () => {
-    const root = roots.find((r) => r.id === currentRootId);
-    const fullPath = currentPath === '.' ? root?.path || '' : `${root?.path || ''}/${currentPath}`;
-    setPathInputValue(fullPath);
-    setTimeout(() => pathInputRef.current?.select(), 0);
-  };
-
-  const handleGoBack = () => {
-    if (currentPath === '.' || !currentPath) return;
-    const pathParts = currentPath.split(/[\\/]/).filter(Boolean);
-    if (pathParts.length === 0) {
-      setCurrentPath('.');
-    } else {
-      const parentPath = pathParts.slice(0, -1).join('/');
-      setCurrentPath(parentPath || '.');
-    }
-  };
-
-  const handleFileClick = (e: React.MouseEvent, file: FileEntry) => {
-    e.stopPropagation();
-    if (renamingPath) {
-      setRenamingPath(null);
-      return;
-    }
-    if (selected.length === 0 || !selected.includes(file.relativePath)) {
-      selectSingle(file.relativePath);
-    }
-  };
-
-  const handleFileNameClick = (e: React.MouseEvent, file: FileEntry) => {
-    e.stopPropagation();
-    // 跳过双击（双击交给 onOpen 处理）
-    if ((e.detail || 1) > 1) return;
-    if (selected.includes(file.relativePath)) {
-      setRenamingPath(file.relativePath);
-    } else {
-      selectSingle(file.relativePath);
-    }
-  };
-
-  const handleRenameSubmit = async (file: FileEntry, newName: string) => {
-    const trimmedName = newName.trim();
-    if (!trimmedName || trimmedName === file.name) {
-      setRenamingPath(null);
-      return;
-    }
-
-    const getExt = (name: string) => {
-      const idx = name.lastIndexOf('.');
-      return idx > 0 ? name.slice(idx + 1).toLowerCase() : '';
-    };
-    const oldExt = getExt(file.name);
-    const newExt = getExt(trimmedName);
-
-    const doRename = async () => {
-      try {
-        await handle(
-          window.api.rename({
-            rootId: currentRootId!,
-            relativePath: file.relativePath,
-            name: trimmedName
-          })
-        );
-        if (viewMode === 'time') {
-          refresh();
-        } else {
-          // 本地更新，避免整页刷新闪烁
-          setFiles((prev) =>
-            prev.map((f) =>
-              f.relativePath === file.relativePath
-                ? {
-                    ...f,
-                    name: trimmedName,
-                    ext: getExt(trimmedName),
-                    fullPath: f.fullPath.replace(/[^\\/]+$/, trimmedName),
-                    relativePath: f.relativePath.replace(/[^\\/]+$/, trimmedName)
-                  }
-                : f
-            )
-          );
-          // 同步已选项
-          setSelected((prev) =>
-            prev.map((p) => (p === file.relativePath ? p.replace(/[^\\/]+$/, trimmedName) : p))
-          );
-        }
+        const list = await handle(window.api.getNewFileTypes());
+        setNewFileTypes(list);
       } catch (err) {
-      } finally {
-        setRenamingPath(null);
+        setNewFileTypes([]);
       }
     };
-
-    if (oldExt !== newExt) {
-      modal.confirm({
-        title: '确认修改扩展名？',
-        content: `将把文件扩展名从 .${oldExt || '(无)'} 改为 .${newExt || '(无)'}`,
-        okType: 'danger',
-        onOk: () => doRename(),
-        onCancel: () => setRenamingPath(null)
-      });
-      return;
-    }
-
-    await doRename();
-  };
-
-  const handleFileAreaMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    const target = e.target as HTMLElement;
-    if (target.closest('.file-card') || target.closest('.list-item')) return;
-    if (renamingPath) {
-      // 先让重命名输入框失焦触发保存
-      (document.activeElement as HTMLElement | null)?.blur?.();
-      return;
-    }
-    clearSelection();
-    const rect = fileAreaRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    dragStartRef.current = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
-    };
-    setIsDragging(true);
-  };
-
-  const handleFileAreaMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging || !dragStartRef.current) return;
-    const rect = fileAreaRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const currentX = e.clientX - rect.left;
-    const currentY = e.clientY - rect.top;
-    const startX = dragStartRef.current.x;
-    const startY = dragStartRef.current.y;
-    const x = Math.min(startX, currentX);
-    const y = Math.min(startY, currentY);
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
-    setSelectionBox({ x, y, width, height });
-    const selectedPaths: string[] = [];
-    Object.entries(fileRefs.current).forEach(([path, el]) => {
-      const elRect = el.getBoundingClientRect();
-      const elX = elRect.left - rect.left;
-      const elY = elRect.top - rect.top;
-      const elRight = elX + elRect.width;
-      const elBottom = elY + elRect.height;
-      if (elX < x + width && elRight > x && elY < y + height && elBottom > y) {
-        selectedPaths.push(path);
-      }
-    });
-    setSelected(selectedPaths);
-  };
-
-  const handleFileAreaMouseUp = () => {
-    setIsDragging(false);
-    setSelectionBox(null);
-    dragStartRef.current = null;
-  };
+    loadNewFileTypes();
+  }, [handle]);
 
   const handleFileAreaDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -825,326 +295,44 @@ const FileBrowser: React.FC = () => {
         files: paths
       })
     );
-    message.success('已导入');
     refresh();
   };
 
-  const breadcrumb = useMemo(() => {
-    const root = roots.find((r) => r.id === currentRootId);
-    const pathParts = currentPath.split(/[\\/]/).filter(Boolean);
-    const items: Array<{ title: string; path: string }> = [];
-
-    if (root) {
-      items.push({ title: root.name, path: '.' });
+  const handleFileClick = (e: React.MouseEvent, file: FileEntry) => {
+    e.stopPropagation();
+    if (renamingPath) {
+      setRenamingPath(null);
+      return;
     }
-
-    let currentPathAccum = '';
-    pathParts.forEach((part) => {
-      currentPathAccum = currentPathAccum ? `${currentPathAccum}/${part}` : part;
-      items.push({ title: part, path: currentPathAccum });
-    });
-
-    return items;
-  }, [currentPath, currentRootId, roots]);
-
-  const operationsBusy = Object.keys(operationStatus).length > 0;
-
-  const openWithVisibleApps = useMemo(() => {
-    const limit = 5;
-    if (openWithExpanded || openWithApps.length <= limit) return openWithApps;
-    return openWithApps.slice(0, limit);
-  }, [openWithExpanded, openWithApps]);
-
-  const openWithItems: MenuProps['items'] = menuState.target
-    ? [
-        ...(openWithLoading
-          ? [
-              {
-                key: 'open-loading',
-                label: '正在读取关联程序...',
-                disabled: true
-              }
-            ]
-          : openWithApps.length
-            ? [
-                ...openWithVisibleApps.map((app) => {
-                  const tag = app.isDefault ? ' (默认)' : app.lastUsed ? ' (最近使用)' : '';
-                  return {
-                    key: app.name || app.command,
-                    icon: <AppIcon path={app.iconPath} size="small" />,
-                    label: `${app.displayName || app.name}${tag}`,
-                    onClick: () => {
-                      closeContextMenu();
-                      return handle(
-                        window.api.openWithApp({
-                          command: app.command,
-                          filePath: menuState.target!.fullPath,
-                          name: app.name,
-                          displayName: app.displayName,
-                          iconPath: app.iconPath
-                        })
-                      );
-                    }
-                  };
-                }),
-                ...(openWithApps.length > openWithVisibleApps.length
-                  ? [
-                      {
-                        key: 'open-more',
-                        icon: <AppstoreOutlined />,
-                        label: '显示更多...',
-                        closeOnClick: false,
-                        onClick: (e: any) => {
-                          e?.domEvent?.preventDefault?.();
-                          e?.domEvent?.stopPropagation?.();
-                          setOpenWithExpanded(true);
-                        }
-                      } as any
-                    ]
-                  : [])
-              ]
-            : [
-                {
-                  key: 'open-none',
-                  label: '未检索到关联程序',
-                  disabled: true
-                }
-              ]),
-        { type: 'divider' as const },
-        {
-          key: 'open-with-dialog',
-          label: '选择其他应用',
-          icon: <AppstoreOutlined />,
-          onClick: async () => {
-            closeContextMenu();
-            return handle(
-              window.api.openWithDialog({
-                filePath: menuState.target!.fullPath
-              })
-            );
-          }
-        },
-        { type: 'divider' as const },
-        {
-          key: 'reveal',
-          label: '在资源管理器中显示',
-          onClick: () => {
-            closeContextMenu();
-            return handle(
-              window.api.revealItem({
-                rootId: currentRootId!,
-                relativePath: menuState.target!.relativePath
-              })
-            );
-          }
-        }
-      ]
-    : [];
-
-  const newMenuItems: MenuProps['items'] = [
-    {
-      key: 'new-folder',
-      label: '文件夹',
-      icon: <FolderAddOutlined />,
-      onClick: () => {
-        closeContextMenu();
-        handleNewFolder();
-      }
-    },
-    ...(newFileTypes.length
-      ? newFileTypes.map((type) => {
-          return {
-            key: `new-${type.extension}`,
-            label: type.name || `新建${type.extension}`,
-            icon: <AppIcon path={type.iconPath} size="small" />,
-            onClick: () =>
-              promptNewFile({
-                ext: type.extension,
-                placeholder: type.name || type.extension,
-                templatePath: type.templatePath || undefined,
-                data: type.data || undefined
-              })
-          };
-        })
-      : [
-          {
-            key: 'new-text',
-            label: '文本文件',
-            icon: <FileTextOutlined />,
-            onClick: () =>
-              promptNewFile({
-                ext: '.txt',
-                placeholder: '文本文件'
-              })
-          }
-        ])
-  ];
-
-  const menuItems: MenuProps['items'] = (() => {
-    const pasteItem = {
-      key: 'paste',
-      label: '粘贴',
-      icon: <SnippetsOutlined />,
-      disabled: !currentRootId,
-      onClick: handlePaste
-    };
-
-    const timeItem = (paths: string[]) => ({
-      key: 'custom-time',
-      label: '设置时间',
-      icon: <FieldTimeOutlined />,
-      onClick: () => handleSetCustomTime(paths)
-    });
-
-    const levelMenu = (paths: string[]) => ({
-      key: 'level',
-      label: '设置等级',
-      icon: <TagOutlined />,
-      children: [
-        {
-          key: 'level-important',
-          label: '重要',
-          onClick: () => handleSetLevelForPaths('important', paths)
-        },
-        {
-          key: 'level-normal',
-          label: '普通',
-          onClick: () => handleSetLevelForPaths('normal', paths)
-        },
-        {
-          key: 'level-temp',
-          label: '临时',
-          onClick: () => handleSetLevelForPaths('temp', paths)
-        },
-        {
-          key: 'level-clear',
-          label: '清除等级',
-          onClick: () => handleSetLevelForPaths(null, paths)
-        }
-      ]
-    });
-
-    if (menuState.type === 'single-file' && menuState.target) {
-      return [
-        {
-          key: 'open',
-          label: '打开',
-          icon: <FolderOpenOutlined />,
-          onClick: () => {
-            closeContextMenu();
-            onOpen(menuState.target!);
-          }
-        },
-        { type: 'divider' as const },
-        {
-          key: 'cut',
-          label: '剪切',
-          icon: <ScissorOutlined />,
-          onClick: () => handleCopyOrCut('cut', [menuState.target!.relativePath])
-        },
-        {
-          key: 'copy',
-          label: '复制',
-          icon: <CopyOutlined />,
-          onClick: () => handleCopyOrCut('copy', [menuState.target!.relativePath])
-        },
-        pasteItem,
-        { type: 'divider' as const },
-        {
-          key: 'clean-temp',
-          label: '清理临时内容',
-          icon: <DeleteOutlined />,
-          onClick: () => handleCleanTemp([menuState.target!.relativePath])
-        },
-        { type: 'divider' as const },
-        {
-          key: 'rename',
-          label: '重命名',
-          icon: <EditOutlined />,
-          onClick: () => {
-            closeContextMenu();
-            setRenamingPath(menuState.target!.relativePath);
-          }
-        },
-        timeItem([menuState.target.relativePath]),
-        levelMenu([menuState.target.relativePath]),
-        { type: 'divider' as const },
-        {
-          key: 'open-with',
-          label: '打开方式',
-          icon: <AppstoreOutlined />,
-          children: openWithItems.length
-            ? openWithItems
-            : [
-                {
-                  key: 'open-default-only',
-                  label: '默认程序',
-                  onClick: () => {
-                    closeContextMenu();
-                    onOpen(menuState.target!);
-                  }
-                }
-              ]
-        }
-      ];
+    if (selected.length === 0 || !selected.includes(file.relativePath)) {
+      selectSingle(file.relativePath);
     }
+  };
 
-    if (menuState.type === 'multi-file') {
-      return [
-        {
-          key: 'cut',
-          label: '剪切',
-          icon: <ScissorOutlined />,
-          onClick: () => handleCopyOrCut('cut')
-        },
-        {
-          key: 'copy',
-          label: '复制',
-          icon: <CopyOutlined />,
-          onClick: () => handleCopyOrCut('copy')
-        },
-        {
-          key: 'clean-temp',
-          label: '清理临时内容',
-          icon: <DeleteOutlined />,
-          onClick: () => handleCleanTemp(selected)
-        },
-        timeItem(selected),
-        levelMenu(selected)
-      ];
+  const handleFileNameClick = (e: React.MouseEvent, file: FileEntry) => {
+    e.stopPropagation();
+    if ((e.detail || 1) > 1) return;
+    if (selected.includes(file.relativePath)) {
+      setRenamingPath(file.relativePath);
+    } else {
+      selectSingle(file.relativePath);
     }
+  };
 
-    if (menuState.type === 'blank') {
-      return [
-        pasteItem,
-        {
-          key: 'clean-temp',
-          label: '清理当前目录的临时内容',
-          icon: <DeleteOutlined />,
-          onClick: () => handleCleanTemp()
-        },
-        {
-          key: 'new',
-          label: '新建',
-          icon: <FileAddOutlined />,
-          children: newMenuItems
-        }
-      ];
-    }
-
-    return [];
-  })();
-
-  const tabItems = tabs.map((tab) => ({
-    key: tab.id,
-    label: (
-      <Space size={6}>
-        <FolderOpenOutlined />
-        <span>{tab.title}</span>
-      </Space>
-    ),
-    closable: tabs.length > 1
-  }));
+  const tabItems = useMemo(
+    () =>
+      tabs.map((tab) => ({
+        key: tab.id,
+        label: (
+          <Space size={6}>
+            <FolderOpenOutlined />
+            <span>{tab.title}</span>
+          </Space>
+        ),
+        closable: tabs.length > 1
+      })),
+    [tabs]
+  );
 
   const addNewTab = () => {
     if (!currentRootId) return;
@@ -1159,9 +347,7 @@ const FileBrowser: React.FC = () => {
     if (action === 'remove') closeTab(targetKey as string);
   };
 
-  const handleMinimize = () => window.api.windowMinimize();
-  const handleMaximize = () => window.api.windowToggleMaximize();
-  const handleClose = () => window.api.windowClose();
+  const operationsBusy = Object.keys(operationStatus).length > 0;
 
   return (
     <div className="app-shell">
@@ -1178,9 +364,9 @@ const FileBrowser: React.FC = () => {
         }}
         onEditTabs={onEditTabs}
         onReorderTabs={reorderTabs}
-        onMinimize={handleMinimize}
-        onMaximize={handleMaximize}
-        onClose={handleClose}
+        onMinimize={() => window.api.windowMinimize()}
+        onMaximize={() => window.api.windowToggleMaximize()}
+        onClose={() => window.api.windowClose()}
       />
 
       <PathSearchBar
@@ -1202,7 +388,7 @@ const FileBrowser: React.FC = () => {
       />
 
       <div className="content-area">
-        <div className="sidebar">
+        <div className="sidebar" style={{ width: sidebarWidth, minWidth: 200, maxWidth: 600 }}>
           <SideBar
             roots={roots}
             currentRootId={currentRootId}
@@ -1212,6 +398,11 @@ const FileBrowser: React.FC = () => {
             onRemoveRoot={(id) => handleRemoveRoot(id)}
             onSelectPath={(p) => setCurrentPath(p)}
             treeRefreshKey={treeRefreshKey}
+          />
+          <div 
+            className="sidebar-resizer"
+            onMouseDown={handleResizeStart}
+            style={{ cursor: 'col-resize', width: 5, height: '100%', position: 'absolute', right: 0, top: 0 }}
           />
         </div>
 
@@ -1246,9 +437,9 @@ const FileBrowser: React.FC = () => {
             fileRefs={fileRefs}
             fileAreaRef={fileAreaRef}
             selectionBox={selectionBox}
-            onFileAreaMouseDown={handleFileAreaMouseDown}
-            onFileAreaMouseMove={handleFileAreaMouseMove}
-            onFileAreaMouseUp={handleFileAreaMouseUp}
+            onFileAreaMouseDown={handleMouseDown}
+            onFileAreaMouseMove={handleMouseMove}
+            onFileAreaMouseUp={handleMouseUp}
             onFileAreaDragOver={handleFileAreaDragOver}
             onFileAreaDrop={handleFileAreaDrop}
             onBlankContextMenu={handleBlankContextMenu}
@@ -1273,6 +464,3 @@ const FileBrowser: React.FC = () => {
 };
 
 export default FileBrowser;
-
-
-

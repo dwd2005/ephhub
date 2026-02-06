@@ -4,9 +4,11 @@ const fs = require('fs-extra');
 const { toRelative } = require('./fileService');
 
 class WatcherManager {
-  constructor(db, sendEvent) {
+  constructor(db, sendEvent, operationTracker = null) {
     this.db = db;
     this.sendEvent = sendEvent;
+    // 内部操作记录，用于匹配 watcher 事件和携带元数据
+    this.operationTracker = operationTracker;
     this.watchers = new Map();
   }
 
@@ -41,12 +43,16 @@ class WatcherManager {
   async handleAdd(root, fullPath, isDir, meta = {}) {
     try {
       const stat = await fs.stat(fullPath);
+      // 如果是内部操作，优先使用记录的元数据，避免重命名/移动时丢失标签
+      const trackedMeta = this.operationTracker
+        ? this.operationTracker.takeMetaAndClear(fullPath)
+        : null;
       await this.db.upsertFiles([
         {
           physical_path: fullPath,
           type: isDir || stat.isDirectory() ? 'dir' : 'file',
-          level_tag: meta.level_tag ?? null,
-          custom_time: meta.custom_time ?? null
+          level_tag: trackedMeta?.level_tag ?? meta.level_tag ?? null,
+          custom_time: trackedMeta?.custom_time ?? meta.custom_time ?? null
         }
       ]);
       this.sendEvent({
@@ -68,6 +74,10 @@ class WatcherManager {
   }
 
   async handleDelete(root, fullPath) {
+    // 删除事件到达时清理内部记录，避免超时补救重复执行
+    if (this.operationTracker) {
+      this.operationTracker.clear(fullPath);
+    }
     await this.db.deleteRecords([fullPath]);
     this.sendEvent({
       rootId: root.id,

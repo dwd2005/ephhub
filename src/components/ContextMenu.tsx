@@ -17,7 +17,7 @@ const ContextMenu: React.FC<Props> = ({ visible, position, items, onClose }) => 
       menu={{
         items,
         onClick: (info) => {
-          const shouldClose = (info?.item as any)?.props?.closeOnClick !== false;
+          const shouldClose = items.find(item => item.key === info.key)?.closeOnClick !== false;
           if (shouldClose) onClose();
         }
       }}

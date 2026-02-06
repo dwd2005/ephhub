@@ -1,4 +1,24 @@
-.search-card,
+.sidebar {
+  position: relative;
+  width: 250px;
+  background-color: #f5f5f5;
+  border-right: 1px solid #e8e8e8;
+  overflow-y: auto;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  background-color: transparent;
+}
+
+.sidebar-resizer:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+}.search-card,
 .batch-card {
   background: var(--bg-primary);
   box-shadow: var(--shadow-sm);

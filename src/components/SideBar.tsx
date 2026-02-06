@@ -68,7 +68,8 @@ const SideBar: React.FC<Props> = ({
   const loadDirChildren = async (node: TreeNode) => {
     if (!currentRoot) return;
     const list = await handle(
-      window.api.list({ rootId: currentRoot.id, relativePath: node.path })
+      window.api.list({ rootId: currentRoot.id, relativePath: node.path }),
+      { onRetry: () => loadDirChildren(node) }
     );
     const dirs = list.filter((f) => f.isDirectory);
     const children: TreeNode[] = dirs.map((d) => ({
