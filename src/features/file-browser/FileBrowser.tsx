@@ -1,5 +1,6 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Space } from 'antd';
+import { App, Space } from 'antd';
+import dayjs from 'dayjs';
 import { FolderOpenOutlined } from '@ant-design/icons';
 import { useStore } from '@/store/useStore';
 import SideBar from '@/components/SideBar';
@@ -15,7 +16,6 @@ import { useSelectionBox } from './hooks/useSelectionBox';
 import { usePathNavigation } from './hooks/usePathNavigation';
 import { useContextMenus } from './hooks/useContextMenus';
 import { useFileBrowserLifecycle } from './hooks/useFileBrowserLifecycle';
-import type { NewFileType } from '@/types/newFile';
 import './file-browser.css';
 
 const levelTagOptions: { key: LevelTag; label: string }[] = [
@@ -97,9 +97,19 @@ const FileBrowser: React.FC = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const fileAreaRef = useRef<HTMLDivElement>(null);
   const fileRefs = useRef<Record<string, HTMLDivElement>>({});
-  const [newFileTypes, setNewFileTypes] = useState<NewFileType[]>([]);
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const { handle } = useApiHelpers();
+  const { message } = App.useApp();
+  const [searchValue, setSearchValue] = useState('');
+  const [searchRegex, setSearchRegex] = useState(false);
+  const [searchScope, setSearchScope] = useState<SearchScope>('recursive');
+  const [filterType, setFilterType] = useState<SearchType>('all');
+  const [filterLevel, setFilterLevel] = useState<LevelTag | 'all' | 'none'>('all');
+  const [filterExts, setFilterExts] = useState<string[]>([]);
+  const [timeField, setTimeField] = useState<SearchTimeField>('none');
+  const [timeRange, setTimeRange] = useState<[any, any]>([null, null]);
+  const searchWarnedRef = useRef(false);
+  const rootIdRef = useRef<string | null>(currentRootId);
 
   const deriveTitle = useCallback(
     (rootId: string | null, path: string) => {
@@ -125,18 +135,59 @@ const FileBrowser: React.FC = () => {
     handleGoBack
   } = usePathNavigation(roots, currentRootId, currentPath, setCurrentPath);
 
+  const isSearchActive = useMemo(() => {
+    const hasKeyword = !!searchValue.trim();
+    const hasExt = filterExts.length > 0;
+    const hasTime = timeField !== 'none' && (timeRange[0] || timeRange[1]);
+    return (
+      hasKeyword ||
+      searchRegex ||
+      searchScope !== 'recursive' ||
+      filterType !== 'all' ||
+      filterLevel !== 'all' ||
+      hasExt ||
+      hasTime
+    );
+  }, [filterExts.length, filterLevel, filterType, searchRegex, searchScope, searchValue, timeField, timeRange]);
+
   const refresh = useCallback(async () => {
     const state = useStore.getState();
     if (!state.currentRootId) return;
     setLoading(true);
     try {
       if (state.viewMode === 'physical') {
-        const list = await handle(
-          window.api.list({ rootId: state.currentRootId, relativePath: state.currentPath }),
-          { onRetry: refresh }
-        );
-        setFiles(list);
+        if (isSearchActive) {
+          const from = timeRange[0] ? dayjs(timeRange[0]).valueOf() : null;
+          const to = timeRange[1] ? dayjs(timeRange[1]).valueOf() : null;
+          const list = await handle(
+            window.api.search({
+              rootId: state.currentRootId,
+              relativePath: state.currentPath,
+              options: {
+                keyword: searchValue.trim(),
+                useRegex: searchRegex,
+                scope: searchScope,
+                type: filterType,
+                levelTag: filterLevel,
+                exts: filterExts,
+                time: { field: timeField, from, to }
+              }
+            }),
+            { onRetry: refresh }
+          );
+          setFiles(list);
+        } else {
+          const list = await handle(
+            window.api.list({ rootId: state.currentRootId, relativePath: state.currentPath }),
+            { onRetry: refresh }
+          );
+          setFiles(list);
+        }
       } else {
+        if (isSearchActive && !searchWarnedRef.current) {
+          message.info('时间视图暂不支持筛选');
+          searchWarnedRef.current = true;
+        }
         const buckets = await handle(window.api.timeBuckets({ rootId: state.currentRootId }), {
           onRetry: refresh
         });
@@ -145,13 +196,64 @@ const FileBrowser: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [handle, setFiles, setTimeBuckets]);
+  }, [
+    filterExts,
+    filterLevel,
+    filterType,
+    handle,
+    isSearchActive,
+    message,
+    searchRegex,
+    searchScope,
+    searchValue,
+    setFiles,
+    setTimeBuckets,
+    timeField,
+    timeRange
+  ]);
 
+  useEffect(() => {
+    if (viewMode !== 'time') {
+      searchWarnedRef.current = false;
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    rootIdRef.current = currentRootId;
+  }, [currentRootId]);
+
+  useEffect(() => {
+    if (!currentRootId) return;
+    refresh();
+  }, [currentRootId, currentPath, viewMode, refresh]);
+
+  useEffect(() => {
+    if (!rootIdRef.current) return;
+    const timer = setTimeout(() => {
+      refresh();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [
+    filterExts,
+    filterLevel,
+    filterType,
+    refresh,
+    searchRegex,
+    searchScope,
+    searchValue,
+    timeField,
+    timeRange
+  ]);
   const applyFsChange = useCallback(
     async (payload: { rootId: string; type: 'add' | 'delete' | 'change'; path: string }) => {
       const state = useStore.getState();
       if (!state.currentRootId || payload.rootId !== state.currentRootId) return;
       if (state.viewMode === 'time') {
+        refresh();
+        return;
+      }
+
+      if (isSearchActive) {
         refresh();
         return;
       }
@@ -193,7 +295,7 @@ const FileBrowser: React.FC = () => {
         refresh();
       }
     },
-    [handle, refresh, setFiles, setSelected]
+    [handle, isSearchActive, refresh, setFiles, setSelected]
   );
 
   const {
@@ -237,7 +339,6 @@ const FileBrowser: React.FC = () => {
     setRenamingPath,
     handleNewFolder,
     promptNewFile,
-    newFileTypes,
     handleCleanTempRoot: () => handleCleanTemp()
   });
 
@@ -245,7 +346,6 @@ const FileBrowser: React.FC = () => {
     currentRootId,
     currentPath,
     viewMode,
-    refresh,
     clearSelection,
     tabs,
     activeTab,
@@ -263,18 +363,6 @@ const FileBrowser: React.FC = () => {
     clearOperation,
     handle
   });
-
-  useEffect(() => {
-    const loadNewFileTypes = async () => {
-      try {
-        const list = await handle(window.api.getNewFileTypes());
-        setNewFileTypes(list);
-      } catch (err) {
-        setNewFileTypes([]);
-      }
-    };
-    loadNewFileTypes();
-  }, [handle]);
 
   const handleFileAreaDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -385,6 +473,34 @@ const FileBrowser: React.FC = () => {
         onBack={handleGoBack}
         onRefresh={refresh}
         levelTagOptions={levelTagOptions}
+        searchValue={searchValue}
+        onSearchChange={setSearchValue}
+        searchPlaceholder={`从「${deriveTitle(currentRootId, currentPath)}」中搜索`}
+        searchDisabled={viewMode === 'time'}
+        searchRegex={searchRegex}
+        onSearchRegexChange={setSearchRegex}
+        searchScope={searchScope}
+        onSearchScopeChange={setSearchScope}
+        filterType={filterType}
+        onFilterTypeChange={setFilterType}
+        filterLevel={filterLevel}
+        onFilterLevelChange={setFilterLevel}
+        filterExts={filterExts}
+        onFilterExtsChange={setFilterExts}
+        timeField={timeField}
+        onTimeFieldChange={setTimeField}
+        timeRange={timeRange}
+        onTimeRangeChange={setTimeRange}
+        onClearFilters={() => {
+          setSearchValue('');
+          setSearchRegex(false);
+          setSearchScope('recursive');
+          setFilterType('all');
+          setFilterLevel('all');
+          setFilterExts([]);
+          setTimeField('none');
+          setTimeRange([null, null]);
+        }}
       />
 
       <div className="content-area">
@@ -448,6 +564,8 @@ const FileBrowser: React.FC = () => {
             onFileNameClick={handleFileNameClick}
             onRenameSubmit={handleRenameSubmit}
             onOpen={onOpen}
+            searchTerm={searchValue}
+            searchRegex={searchRegex}
           />
         </div>
       </div>
@@ -464,3 +582,10 @@ const FileBrowser: React.FC = () => {
 };
 
 export default FileBrowser;
+
+
+
+
+
+
+

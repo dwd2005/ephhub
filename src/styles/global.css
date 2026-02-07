@@ -90,6 +90,8 @@
   display: flex;
   height: 100%;
   border-top: 1px solid var(--divider-color);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -101,12 +103,17 @@
   gap: 12px;
   min-width: 200px;
   max-width: 600px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .file-area {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .ribbon-card {
@@ -164,6 +171,59 @@
 .file-card .meta {
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.sidebar-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-pane-header {
+  margin-bottom: 6px;
+}
+
+.sidebar-tree-body,
+.sidebar-roots-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--divider-color);
+  background: var(--bg-primary);
+}
+
+.sidebar-roots-list {
+  padding: 4px 0;
+}
+
+.sidebar-splitter {
+  height: 8px;
+  cursor: row-resize;
+  position: relative;
+}
+
+.sidebar-splitter::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 50%;
+  height: 1px;
+  background: var(--divider-color);
+}
+
+.sidebar-splitter:hover::before {
+  background: var(--primary-color);
 }
 
 .tab-label {

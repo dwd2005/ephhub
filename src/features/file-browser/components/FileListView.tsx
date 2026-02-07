@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Flex, Input, Tag } from 'antd';
 import { FolderOpenOutlined } from '@ant-design/icons';
 import { formatTime, levelTagMeta } from '@/utils/format';
@@ -16,6 +16,8 @@ type Props = {
   onFileNameClick: (e: React.MouseEvent, file: FileEntry) => void;
   operationStatus: Record<string, OperationStatus>;
   setRenamingPath: (path: string | null) => void;
+  searchTerm: string;
+  searchRegex: boolean;
 };
 
 const FileListView: React.FC<Props> = ({
@@ -29,17 +31,146 @@ const FileListView: React.FC<Props> = ({
   onRenameSubmit,
   onFileNameClick,
   operationStatus,
-  setRenamingPath
+  setRenamingPath,
+  searchTerm,
+  searchRegex
 }) => {
   const safeSelected = Array.isArray(selected) ? selected : [];
+
+  const renderHighlightedName = (name: string) => {
+    const keyword = (searchTerm || '').trim();
+    if (!keyword) return name;
+    try {
+      if (searchRegex) {
+        const re = new RegExp(keyword, 'ig');
+        const parts: React.ReactNode[] = [];
+        let lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(name)) !== null) {
+          const start = match.index;
+          const end = start + match[0].length;
+          if (start > lastIndex) {
+            parts.push(name.slice(lastIndex, start));
+          }
+          parts.push(
+            <mark className="search-hit" key={`${start}-${end}`}>
+              {name.slice(start, end)}
+            </mark>
+          );
+          lastIndex = end;
+          if (match[0].length === 0) break;
+        }
+        if (lastIndex < name.length) {
+          parts.push(name.slice(lastIndex));
+        }
+        return parts.length ? parts : name;
+      }
+      const lower = name.toLowerCase();
+      const target = keyword.toLowerCase();
+      const idx = lower.indexOf(target);
+      if (idx === -1) return name;
+      const before = name.slice(0, idx);
+      const hit = name.slice(idx, idx + target.length);
+      const after = name.slice(idx + target.length);
+      return (
+        <>
+          {before}
+          <mark className="search-hit">{hit}</mark>
+          {after}
+        </>
+      );
+    } catch {
+      return name;
+    }
+  };
+  const [colWidths, setColWidths] = useState({
+    name: 320,
+    modified: 180,
+    custom: 180,
+    level: 140
+  });
+  const resizingRef = useRef<{
+    key: 'name' | 'modified' | 'custom' | 'level';
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+
+  const minWidths = {
+    name: 200,
+    modified: 140,
+    custom: 140,
+    level: 110
+  };
+
+  const handleResizeStart = (
+    key: 'name' | 'modified' | 'custom' | 'level',
+    e: React.MouseEvent
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizingRef.current = {
+      key,
+      startX: e.clientX,
+      startWidth: colWidths[key]
+    };
+    document.body.style.cursor = 'col-resize';
+  };
+
+  useEffect(() => {
+    const handleMove = (e: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const { key, startX, startWidth } = resizingRef.current;
+      const delta = e.clientX - startX;
+      const next = Math.max(minWidths[key], startWidth + delta);
+      setColWidths((prev) => ({ ...prev, [key]: next }));
+    };
+
+    const handleUp = () => {
+      if (resizingRef.current) {
+        resizingRef.current = null;
+        document.body.style.cursor = '';
+      }
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [minWidths]);
 
   return (
     <>
       <div className="list-header">
-        <div className="list-header-name">名称</div>
-        <div className="list-header-date">修改日期</div>
-        <div className="list-header-date">文件日期</div>
-        <div className="list-header-level">等级</div>
+        <div className="list-header-cell list-header-name" style={{ width: colWidths.name }}>
+          名称
+          <span
+            className="column-resizer"
+            onMouseDown={(e) => handleResizeStart('name', e)}
+          />
+        </div>
+        <div className="list-header-cell list-header-date" style={{ width: colWidths.modified }}>
+          修改日期
+          <span
+            className="column-resizer"
+            onMouseDown={(e) => handleResizeStart('modified', e)}
+          />
+        </div>
+        <div className="list-header-cell list-header-date" style={{ width: colWidths.custom }}>
+          文件日期
+          <span
+            className="column-resizer"
+            onMouseDown={(e) => handleResizeStart('custom', e)}
+          />
+        </div>
+        <div className="list-header-cell list-header-level" style={{ width: colWidths.level }}>
+          等级
+          <span
+            className="column-resizer"
+            onMouseDown={(e) => handleResizeStart('level', e)}
+          />
+        </div>
       </div>
       {files.map((file) => (
         <div
@@ -52,7 +183,7 @@ const FileListView: React.FC<Props> = ({
           onDoubleClick={() => onOpen(file)}
           onContextMenu={(e) => onContextMenu(e, file)}
         >
-          <div className="list-item-name">
+          <div className="list-item-cell list-item-name" style={{ width: colWidths.name }}>
             <Flex align="center" gap={8}>
               {file.isDirectory ? (
                 <FolderOpenOutlined />
@@ -83,23 +214,29 @@ const FileListView: React.FC<Props> = ({
                   style={{ flex: 1 }}
                 />
               ) : (
-                <span onClick={(e) => onFileNameClick(e, file)}>{file.name}</span>
+                <span onClick={(e) => onFileNameClick(e, file)}>
+                  {renderHighlightedName(file.name)}
+                </span>
               )}
             </Flex>
           </div>
-          <div className="list-item-date">{formatTime(file.modified)}</div>
-          <div className="list-item-date">
-            {file.customTime ? formatTime(Date.parse(file.customTime)) : '-'}
+          <div className="list-item-cell list-item-date" style={{ width: colWidths.modified }}>
+            {formatTime(file.modified)}
           </div>
-          <div className="list-item-level">
-            <Tag color={levelTagMeta(file.levelTag).color}>
-              {levelTagMeta(file.levelTag).label}
-            </Tag>
-            {operationStatus[file.fullPath] && (
-              <Tag color="processing" style={{ marginLeft: 8 }}>
-                {operationStatus[file.fullPath].operation}...
+          <div className="list-item-cell list-item-date" style={{ width: colWidths.custom }}>
+            {file.customTime ? formatTime(Date.parse(file.customTime)) : formatTime(file.created)}
+          </div>
+          <div className="list-item-cell list-item-level" style={{ width: colWidths.level }}>
+            <div className="list-item-tags">
+              <Tag color={levelTagMeta(file.levelTag).color}>
+                {levelTagMeta(file.levelTag).label}
               </Tag>
-            )}
+              {operationStatus[file.fullPath] && (
+                <Tag color="processing">
+                  {operationStatus[file.fullPath].operation}...
+                </Tag>
+              )}
+            </div>
           </div>
         </div>
       ))}

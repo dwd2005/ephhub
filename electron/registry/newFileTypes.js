@@ -1,157 +1,158 @@
-const { execReg, parseDefaultValue } = require('./utils');
+﻿const { execPowerShell } = require('./utils');
 
-async function getProgId(ext) {
-  try {
-    const res = await execReg(`reg query "HKCR\\${ext}" /ve`);
-    return parseDefaultValue(res);
-  } catch (err) {
-    return '';
-  }
+function buildShellNewScript() {
+  return `
+$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$WarningPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+
+if (-not ('AssocQuery' -as [type])) {
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+static class AssocQuery {
+  public const uint ASSOCF_INIT_DEFAULTTOSTAR = 0x4;
+  public const uint ASSOCF_NOTRUNCATE = 0x20;
+  public const uint ASSOCSTR_FRIENDLYDOCNAME = 3;
+  public const uint ASSOCSTR_DEFAULTICON = 15;
+
+  [DllImport("Shlwapi.dll", CharSet = CharSet.Unicode)]
+  public static extern uint AssocQueryString(uint flags, uint str, string pszAssoc, string pszExtra, StringBuilder pszOut, ref uint pcchOut);
+
+  [DllImport("Shlwapi.dll", CharSet = CharSet.Unicode)]
+  public static extern int SHLoadIndirectString(string pszSource, StringBuilder pszOutBuf, uint cchOutBuf, IntPtr ppvReserved);
+}
+"@
 }
 
-async function getFriendlyName(ext) {
-  try {
-    const res = await execReg(`reg query "HKCR\\${ext}" /ve`);
-    const progId = parseDefaultValue(res);
-    if (progId) {
-      try {
-        const res2 = await execReg(`reg query "HKCR\\${progId}" /ve`);
-        const name = parseDefaultValue(res2);
-        if (name && name.toLowerCase() !== 'value not set') return name;
-      } catch (err) {}
-      return progId;
-    }
-    return ext;
-  } catch (err) {
-    return ext;
-  }
+function Get-AssocString([string]$ext, [uint32]$strType) {
+  $len = 0
+  [AssocQuery]::AssocQueryString([AssocQuery]::ASSOCF_INIT_DEFAULTTOSTAR, $strType, $ext, $null, $null, [ref]$len) | Out-Null
+  if ($len -le 0) { return '' }
+  $sb = New-Object System.Text.StringBuilder($len)
+  [AssocQuery]::AssocQueryString([AssocQuery]::ASSOCF_INIT_DEFAULTTOSTAR, $strType, $ext, $null, $sb, [ref]$len) | Out-Null
+  return $sb.ToString()
 }
 
-async function getDefaultIcon(ext) {
+function Resolve-IndirectString([string]$text) {
+  if ([string]::IsNullOrWhiteSpace($text)) { return $text }
+  if (-not $text.StartsWith('@')) { return $text }
   try {
-    const res = await execReg(`reg query "HKCR\\${ext}" /ve`);
-    const progId = parseDefaultValue(res);
-    if (progId) {
-      try {
-        const res2 = await execReg(`reg query "HKCR\\${progId}\\DefaultIcon" /ve`);
-        const icon = parseDefaultValue(res2);
-        if (icon) return icon;
-      } catch (err) {}
-    }
-  } catch (err) {}
-  try {
-    const res3 = await execReg(`reg query "HKCR\\${ext}\\DefaultIcon" /ve`);
-    const icon2 = parseDefaultValue(res3);
-    if (icon2) return icon2;
-  } catch (err) {}
-  return '';
+    $buf = New-Object System.Text.StringBuilder(512)
+    [AssocQuery]::SHLoadIndirectString($text, $buf, $buf.Capacity, [IntPtr]::Zero) | Out-Null
+    $resolved = $buf.ToString()
+    if ($resolved) { return $resolved }
+  } catch {}
+  return $text
 }
 
-async function hasShellNew(ext) {
+$root = [Microsoft.Win32.Registry]::ClassesRoot
+$exts = New-Object System.Collections.Generic.HashSet[string]
+foreach ($name in $root.GetSubKeyNames()) {
+  if (-not $name.StartsWith('.')) { continue }
   try {
-    await execReg(`reg query "HKCR\\${ext}\\ShellNew"`);
-    return true;
-  } catch (err) {
-    try {
-      const progId = await getProgId(ext);
-      if (!progId) return false;
-      await execReg(`reg query "HKCR\\${progId}\\ShellNew"`);
-      return true;
-    } catch (e) {
-      return false;
+    $sk = $root.OpenSubKey("$name\\ShellNew")
+    if ($sk) {
+      $exts.Add($name.ToLower()) | Out-Null
+      $sk.Close()
     }
-  }
+  } catch {}
 }
 
-async function getShellNewTemplate(ext) {
-  const parse = (text) => {
-    const lines = text.split(/\r?\n/);
-    for (const line of lines) {
-      const m = line.match(/FileName\s+REG_SZ\s+([^\r\n]+)/i);
-      if (m) return { templatePath: m[1].trim() };
-      const data = line.match(/Data\s+REG_BINARY\s+([0-9A-F ]+)/i);
-      if (data) return { data: data[1].replace(/\s+/g, '') };
-      const nullFile = line.match(/NullFile\s+/i);
-      if (nullFile) return { nullFile: true };
-    }
-    return null;
-  };
+$results = New-Object System.Collections.Generic.List[object]
+foreach ($ext in $exts) {
+  $name = Get-AssocString $ext ([AssocQuery]::ASSOCSTR_FRIENDLYDOCNAME)
+  $name = Resolve-IndirectString $name
+  if (-not $name) { $name = $ext.ToUpper() }
+
+  $icon = Get-AssocString $ext ([AssocQuery]::ASSOCSTR_DEFAULTICON)
+  if (-not $icon) { $icon = "$env:SystemRoot\\System32\\shell32.dll,0" }
+
+  $templatePath = $null
+  $dataHex = $null
+  $nullFile = $false
 
   try {
-    const res = await execReg(`reg query "HKCR\\${ext}\\ShellNew"`);
-    const parsed = parse(res);
-    if (parsed) return parsed;
-  } catch (err) {}
-
-  try {
-    const progId = await getProgId(ext);
-    if (progId) {
-      const res = await execReg(`reg query "HKCR\\${progId}\\ShellNew"`);
-      const parsed = parse(res);
-      if (parsed) return parsed;
+    $sk = $root.OpenSubKey("$ext\\ShellNew")
+    if (-not $sk) {
+      $extKey = $root.OpenSubKey($ext)
+      if ($extKey) {
+        $progId = $extKey.GetValue('')
+        $extKey.Close()
+        if ($progId) {
+          $sk = $root.OpenSubKey("$progId\\ShellNew")
+        }
+      }
     }
-  } catch (err) {}
+    if ($sk) {
+      $fileName = $sk.GetValue('FileName')
+      if ($fileName) { $templatePath = $fileName }
 
-  return {};
+      $data = $sk.GetValue('Data')
+      if ($data -and $data -is [byte[]]) {
+        $dataHex = ($data | ForEach-Object { $_.ToString('X2') }) -join ''
+      }
+
+      $nullFile = $sk.GetValue('NullFile') -ne $null
+      $sk.Close()
+    }
+  } catch {}
+
+  $results.Add([pscustomobject]@{
+    extension = $ext
+    name = $name
+    iconPath = $icon
+    templatePath = $templatePath
+    data = $dataHex
+    nullFile = $nullFile
+  })
+}
+
+$json = $results | Sort-Object extension | ConvertTo-Json -Compress
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+[Console]::WriteLine([System.Convert]::ToBase64String($bytes))
+exit 0
+`;
 }
 
 async function getNewFileTypes() {
-  const commonExts = [
-    '.txt', '.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.pdf',
-    '.bmp', '.jpg', '.jpeg', '.png', '.gif', '.tiff', '.ico',
-    '.mp3', '.wav', '.wma',
-    '.avi', '.mp4', '.wmv', '.mov',
-    '.zip', '.rar', '.7z',
-    '.html', '.css', '.js', '.json', '.xml',
-    '.log', '.csv', '.md'
-  ];
-
-  const discovered = await (async () => {
+  const script = buildShellNewScript();
+  const output = await execPowerShell(script);
+  const cleaned = (output || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
+  let parsed = [];
+  if (cleaned) {
     try {
-      const output = await execReg('reg query HKCR /f ShellNew /s /k');
-      const lines = output.split(/\r?\n/);
-      const set = new Set();
-      for (const line of lines) {
-        const m = line.match(/HKEY_CLASSES_ROOT\\([^\\]+)\\ShellNew/i);
-        if (!m) continue;
-        const key = m[1];
-        if (key.startsWith('.')) {
-          set.add(key.toLowerCase());
-        } else {
-          try {
-            const res = await execReg(`reg query "HKCR\\.${key}" /ve`);
-            const progId = parseDefaultValue(res);
-            if (progId && progId.toLowerCase() === key.toLowerCase()) {
-              set.add(`.${key.toLowerCase()}`);
-            }
-          } catch (e) {}
+      const jsonText = Buffer.from(cleaned, 'base64').toString('utf8');
+      parsed = jsonText ? JSON.parse(jsonText) : [];
+    } catch (err) {
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch (err2) {
+        parsed = [];
+        // 调试：输出解析失败信息（避免污染正常输出）
+        if (process.env.DEBUG_SHELL_NEW === '1') {
+          console.error('[newFileTypes] JSON parse failed');
+          console.error('[newFileTypes] raw output last line:', cleaned.slice(0, 500));
         }
       }
-      return Array.from(set);
-    } catch (err) {
-      return [];
     }
-  })();
-
-  const extSet = new Set([...commonExts.map((e) => e.toLowerCase()), ...discovered]);
-  const results = [];
-
-  for (const ext of Array.from(extSet).sort()) {
-    if (!(await hasShellNew(ext))) continue;
-    const friendly = await getFriendlyName(ext);
-    const iconPath = await getDefaultIcon(ext);
-    const templateInfo = await getShellNewTemplate(ext);
-    results.push({
-      extension: ext,
-      name: friendly || ext.toUpperCase(),
-      iconPath,
-      templatePath: templateInfo.templatePath || null,
-      data: templateInfo.data || null,
-      nullFile: !!templateInfo.nullFile
-    });
   }
-
-  return results;
+  if (process.env.DEBUG_SHELL_NEW === '1') {
+    const preview = Array.isArray(parsed) ? parsed.slice(0, 3) : parsed;
+    console.error('[newFileTypes] parsed preview:', JSON.stringify(preview).slice(0, 500));
+  }
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  return list.map((item) => ({
+    extension: item.extension,
+    name: item.name || item.extension.toUpperCase(),
+    iconPath: item.iconPath || 'C:\\Windows\\System32\\shell32.dll,0',
+    templatePath: item.templatePath || null,
+    data: item.data || null,
+    nullFile: !!item.nullFile
+  }));
 }
 
 module.exports = { getNewFileTypes };

@@ -5,7 +5,6 @@ interface LifecycleParams {
   currentRootId: string | null;
   currentPath: string;
   viewMode: ViewMode;
-  refresh: () => Promise<void>;
   clearSelection: () => void;
   tabs: TabInfo[];
   activeTab: string;
@@ -28,7 +27,6 @@ export const useFileBrowserLifecycle = ({
   currentRootId,
   currentPath,
   viewMode,
-  refresh,
   clearSelection,
   tabs,
   activeTab,
@@ -48,12 +46,6 @@ export const useFileBrowserLifecycle = ({
 }: LifecycleParams) => {
   // guard against duplicate listener registration in React 18 strict/dev
   const onceRef = useRef(false);
-
-  useEffect(() => {
-    if (currentRootId) {
-      refresh();
-    }
-  }, [currentRootId, currentPath, viewMode, refresh]);
 
   useEffect(() => {
     clearSelection();

@@ -29,6 +29,10 @@ const errorTips: Record<string, { title: string; suggestion: string }> = {
   EEXIST: {
     title: '目标已存在',
     suggestion: '请更换名称或删除已有目标后重试。'
+  },
+  FS_SYNC_REQUIRED: {
+    title: '可能存在不一致',
+    suggestion: '建议手动重新扫描更新数据库后再继续操作。'
   }
 };
 

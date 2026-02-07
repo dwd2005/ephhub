@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   renameRoot: (payload) => ipcRenderer.invoke('roots:rename', payload),
 
   list: (payload) => ipcRenderer.invoke('fs:list', payload),
+  search: (payload) => ipcRenderer.invoke('fs:search', payload),
   timeBuckets: (payload) => ipcRenderer.invoke('fs:time-buckets', payload),
   createFolder: (payload) => ipcRenderer.invoke('fs:create-folder', payload),
   createFile: (payload) => ipcRenderer.invoke('fs:create-file', payload),

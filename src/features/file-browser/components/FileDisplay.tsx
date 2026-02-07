@@ -33,6 +33,8 @@ type Props = {
   onFileNameClick: (e: React.MouseEvent, file: FileEntry) => void;
   onRenameSubmit: (file: FileEntry, newName: string) => void;
   onOpen: (file: FileEntry) => void;
+  searchTerm: string;
+  searchRegex: boolean;
 };
 
 const FileDisplay: React.FC<Props> = ({
@@ -60,7 +62,9 @@ const FileDisplay: React.FC<Props> = ({
   onFileContextMenu,
   onFileNameClick,
   onRenameSubmit,
-  onOpen
+  onOpen,
+  searchTerm,
+  searchRegex
 }) => {
   return (
     <div
@@ -123,6 +127,8 @@ const FileDisplay: React.FC<Props> = ({
               onFileNameClick={onFileNameClick}
               operationStatus={operationStatus}
               setRenamingPath={setRenamingPath}
+              searchTerm={searchTerm}
+              searchRegex={searchRegex}
             />
           ) : (
             <FileGridView
@@ -137,6 +143,8 @@ const FileDisplay: React.FC<Props> = ({
               onFileNameClick={onFileNameClick}
               operationStatus={operationStatus}
               setRenamingPath={setRenamingPath}
+              searchTerm={searchTerm}
+              searchRegex={searchRegex}
             />
           )}
         </div>

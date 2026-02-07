@@ -8,7 +8,7 @@ const { WatcherManager } = require('./watchers');
 const { OperationTracker } = require('./operationTracker');
 const { PathTaskQueue } = require('./pathQueue');
 const fileService = require('./fileService');
-const { getOpenWithApps, getNewFileTypes } = require('./registry');
+const { getOpenWithApps, getNewFileTypes, invokeOpenWithHandler } = require('./registry');
 const { exec } = require('child_process');
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -35,8 +35,19 @@ const watcherManager = new WatcherManager(db, (payload) => {
 const iconCache = new Map(); // key: `${path}|${size}` -> dataURL
 async function getIconData(targetPath, size = 'small') {
   if (!targetPath) return '';
-  const sanitized = (targetPath || '').replace(/^"|"$/g, '');
-  const filePath = sanitized.includes(',') ? sanitized.split(',')[0] : sanitized;
+  let sanitized = (targetPath || '').trim();
+  // 去掉可能的前缀与引号，如 @%SystemRoot%\... 或 "C:\..."
+  if (sanitized.startsWith('@')) sanitized = sanitized.slice(1);
+  sanitized = sanitized.replace(/^"|"$/g, '');
+  // 展开环境变量，例如 %SystemRoot%
+  sanitized = sanitized.replace(/%([^%]+)%/g, (_m, key) => process.env[key] || `%${key}%`);
+  let filePath = sanitized;
+  const indexMatch = sanitized.match(/^(.*),(\\s*-?\\d+)$/);
+  if (indexMatch) {
+    filePath = indexMatch[1];
+  } else if (sanitized.includes(',')) {
+    filePath = sanitized.split(',')[0];
+  }
   const key = `${filePath}|${size}`;
   if (iconCache.has(key)) return iconCache.get(key);
   try {
@@ -208,6 +219,9 @@ function runWithPathQueue(rootPath, absPaths, task) {
 // 统一错误信息，尽量覆盖常见文件系统异常
 function formatFsError(err) {
   if (!err) return '操作失败';
+  if (err.code === 'FS_SYNC_REQUIRED') {
+    return err.message || '操作失败，建议手动重新扫描更新数据库';
+  }
   if (err.code) {
     switch (err.code) {
       case 'ENOENT':
@@ -227,6 +241,14 @@ function formatFsError(err) {
     }
   }
   return err.message || '操作失败';
+}
+
+// 标记需要用户手动重新扫描以修复数据库一致性
+function markRescanRequired(err) {
+  const next = err instanceof Error ? err : new Error('操作失败');
+  if (!next.code) next.code = 'FS_SYNC_REQUIRED';
+  if (!next.message) next.message = '操作失败';
+  return next;
 }
 
 async function getClipboardFilePaths() {
@@ -328,6 +350,12 @@ function registerIpc() {
     return fileService.listDirectory(root.path, relativePath || '.', db);
   });
 
+  withErrorHandling('fs:search', async (_evt, payload) => {
+    const { rootId, relativePath, options } = payload;
+    const root = ensureRoot(rootId);
+    return fileService.searchEntries(root.path, relativePath || '.', options || {}, db);
+  });
+
   withErrorHandling('fs:time-buckets', async (_evt, payload) => {
     const { rootId } = payload;
     const root = ensureRoot(rootId);
@@ -383,20 +411,24 @@ function registerIpc() {
     const target = path.join(path.dirname(original), name);
     return runWithPathQueue(root.path, [original, target], async () =>
       runWithStatus([original], 'rename', async () => {
-        const prevInfo = (await db.getInfo([original]))[original] || {};
-        // 记录旧路径与新路径，保证 watcher 写入时携带旧元数据
-        trackFsOperation('rename', root.path, [original, target], {
-          metaByPath: {
-            [target]: {
-              level_tag: prevInfo.levelTag ?? null,
-              custom_time: prevInfo.customTime ?? null
+        try {
+          const prevInfo = (await db.getInfo([original]))[original] || {};
+          // 记录旧路径与新路径，保证 watcher 写入时携带旧元数据
+          trackFsOperation('rename', root.path, [original, target], {
+            metaByPath: {
+              [target]: {
+                level_tag: prevInfo.levelTag ?? null,
+                custom_time: prevInfo.customTime ?? null
+              }
             }
-          }
-        });
-        const renamed = await fileService.renameEntry(root.path, relativePath, name);
-        // 关键操作完成后立即同步，避免元数据短暂丢失
-        await operationTracker.syncNow([original, target]);
-        return renamed;
+          });
+          const renamed = await fileService.renameEntry(root.path, relativePath, name);
+          // 关键操作完成后立即同步，避免元数据短暂丢失
+          await operationTracker.syncNow([original, target]);
+          return renamed;
+        } catch (err) {
+          throw markRescanRequired(err);
+        }
       })
     );
   });
@@ -407,10 +439,14 @@ function registerIpc() {
     const absTargets = targets.map((rel) => path.join(root.path, rel));
     return runWithPathQueue(root.path, absTargets, async () =>
       runWithStatus(absTargets, 'delete', async () => {
-        // 记录内部操作，等待 watcher 统一写库
-        trackFsOperation('delete', root.path, absTargets);
-        const deleted = await fileService.deleteEntries(root.path, targets);
-        return deleted;
+        try {
+          // 记录内部操作，等待 watcher 统一写库
+          trackFsOperation('delete', root.path, absTargets);
+          const deleted = await fileService.deleteEntries(root.path, targets);
+          return deleted;
+        } catch (err) {
+          throw markRescanRequired(err);
+        }
       })
     );
   });
@@ -424,20 +460,24 @@ function registerIpc() {
     );
     return runWithPathQueue(root.path, [...absTargets, ...destAbs], async () =>
       runWithStatus(absTargets, 'move', async () => {
-        const infoMap = await db.getInfo(absTargets);
-        const metaByPath = {};
-        destAbs.forEach((destPath, idx) => {
-          metaByPath[destPath] = {
-            level_tag: infoMap[absTargets[idx]]?.levelTag ?? null,
-            custom_time: infoMap[absTargets[idx]]?.customTime ?? null
-          };
-        });
-        // 记录旧路径与新路径，保证 watcher 写入时携带旧元数据
-        trackFsOperation('move', root.path, [...absTargets, ...destAbs], { metaByPath });
-        const moved = await fileService.moveEntries(root.path, targets, destination);
-        // 关键操作完成后立即同步，避免元数据短暂丢失
-        await operationTracker.syncNow([...absTargets, ...destAbs]);
-        return moved;
+        try {
+          const infoMap = await db.getInfo(absTargets);
+          const metaByPath = {};
+          destAbs.forEach((destPath, idx) => {
+            metaByPath[destPath] = {
+              level_tag: infoMap[absTargets[idx]]?.levelTag ?? null,
+              custom_time: infoMap[absTargets[idx]]?.customTime ?? null
+            };
+          });
+          // 记录旧路径与新路径，保证 watcher 写入时携带旧元数据
+          trackFsOperation('move', root.path, [...absTargets, ...destAbs], { metaByPath });
+          const moved = await fileService.moveEntries(root.path, targets, destination);
+          // 关键操作完成后立即同步，避免元数据短暂丢失
+          await operationTracker.syncNow([...absTargets, ...destAbs]);
+          return moved;
+        } catch (err) {
+          throw markRescanRequired(err);
+        }
       })
     );
   });
@@ -569,10 +609,14 @@ function registerIpc() {
 
     return runWithPathQueue(root.path, absList, async () =>
       runWithStatus(absList, 'delete', async () => {
-        for (const abs of absList) {
-          await cleanNode(abs);
+        try {
+          for (const abs of absList) {
+            await cleanNode(abs);
+          }
+          return true;
+        } catch (err) {
+          throw markRescanRequired(err);
         }
-        return true;
       })
     );
   });
@@ -585,10 +629,14 @@ function registerIpc() {
     const absTargets = rows.map((r) => r.physical_path);
     return runWithPathQueue(root.path, absTargets, async () =>
       runWithStatus(absTargets, 'delete', async () => {
-        // 记录内部删除操作，等待 watcher 统一写库
-        trackFsOperation('delete-by-level', root.path, absTargets);
-        const deleted = await fileService.deleteEntries(root.path, rels);
-        return deleted;
+        try {
+          // 记录内部删除操作，等待 watcher 统一写库
+          trackFsOperation('delete-by-level', root.path, absTargets);
+          const deleted = await fileService.deleteEntries(root.path, rels);
+          return deleted;
+        } catch (err) {
+          throw markRescanRequired(err);
+        }
       })
     );
   });
@@ -668,13 +716,19 @@ function registerIpc() {
   withErrorHandling('fs:open-with-app', async (_evt, payload) => {
     const { command, filePath, name, displayName, iconPath } = payload;
     if (!command || !filePath) return false;
+    const ext = path.extname(filePath).toLowerCase();
+    if (command.startsWith('com:')) {
+      const handlerName = command.slice(4);
+      await invokeOpenWithHandler(handlerName, filePath);
+      rememberOpenWith(ext, { command, name, displayName, iconPath });
+      return true;
+    }
     let finalCmd = command;
     if (/%1|%l|%L/i.test(finalCmd)) {
       finalCmd = finalCmd.replace(/%1|%l|%L/gi, `"${filePath}"`);
     } else {
       finalCmd = `${finalCmd} "${filePath}"`;
     }
-    const ext = path.extname(filePath).toLowerCase();
     return new Promise((resolve, reject) => {
       exec(finalCmd, { windowsHide: true }, (err) => {
         if (err) return reject(err);

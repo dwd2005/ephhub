@@ -46,10 +46,21 @@ async function listDirectory(rootPath, relativePath, db) {
   }
 
   const infoMap = await db.getInfo(entries.map((e) => e.fullPath));
+  const defaultTimeRecords = [];
   entries.forEach((entry) => {
     const dbInfo = infoMap[entry.fullPath] || {};
     entry.levelTag = dbInfo.levelTag || null;
-    entry.customTime = dbInfo.customTime || null;
+    if (dbInfo.customTime) {
+      entry.customTime = dbInfo.customTime;
+    } else {
+      const defaultTime = new Date(entry.created).toISOString();
+      entry.customTime = defaultTime;
+      defaultTimeRecords.push({
+        physical_path: entry.fullPath,
+        type: entry.type,
+        custom_time: defaultTime
+      });
+    }
   });
 
   // 仅更新类型和缺失行，避免覆盖自定义元数据
@@ -59,8 +70,157 @@ async function listDirectory(rootPath, relativePath, db) {
       type: entry.type
     }))
   );
+  if (defaultTimeRecords.length) {
+    // 仅当 custom_time 为空时写入创建时间
+    await db.setCustomTimeIfNull(defaultTimeRecords);
+  }
 
   return entries;
+}
+
+async function searchEntries(rootPath, relativePath, options, db) {
+  const resolvedBase = ensureInsideRoot(rootPath, path.join(rootPath, relativePath || '.'));
+  const {
+    keyword = '',
+    useRegex = false,
+    scope = 'recursive',
+    type = 'all',
+    levelTag = 'all',
+    exts = [],
+    time = { field: 'none', from: null, to: null }
+  } = options || {};
+
+  let nameMatcher = null;
+  const trimmedKeyword = (keyword || '').trim();
+  if (trimmedKeyword) {
+    if (useRegex) {
+      try {
+        nameMatcher = new RegExp(trimmedKeyword, 'i');
+      } catch (err) {
+        throw new Error('正则表达式无效，请检查语法');
+      }
+    } else {
+      const lower = trimmedKeyword.toLowerCase();
+      nameMatcher = (name) => name.toLowerCase().includes(lower);
+    }
+  }
+
+  const normalizedExts = new Set(
+    (Array.isArray(exts) ? exts : [])
+      .map((ext) => (ext || '').trim())
+      .filter(Boolean)
+      .map((ext) => (ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`))
+  );
+
+  const records = await db.listByRootDetailed(rootPath);
+  const candidates = [];
+
+  for (const row of records) {
+    const fullPath = row.physical_path;
+    if (!fullPath) continue;
+    const relativeToBase = path.relative(resolvedBase, fullPath);
+    if (!relativeToBase || relativeToBase.startsWith('..')) continue;
+    if (scope === 'current' && relativeToBase.includes(path.sep)) continue;
+
+    const name = path.basename(fullPath);
+    if (nameMatcher) {
+      if (useRegex) {
+        if (!nameMatcher.test(name)) continue;
+      } else if (typeof nameMatcher === 'function') {
+        if (!nameMatcher(name)) continue;
+      }
+    }
+
+    if (type !== 'all' && row.type) {
+      if (type === 'file' && row.type !== 'file') continue;
+      if (type === 'dir' && row.type !== 'dir') continue;
+    }
+
+    if (levelTag !== 'all') {
+      if (levelTag === 'none') {
+        if (row.level_tag !== null && row.level_tag !== undefined && row.level_tag !== '') continue;
+      } else if (row.level_tag !== levelTag) {
+        continue;
+      }
+    }
+
+    if (normalizedExts.size > 0) {
+      const ext = path.extname(name).toLowerCase();
+      if (!ext || !normalizedExts.has(ext)) continue;
+    }
+
+    candidates.push(row);
+  }
+
+  const results = [];
+  const defaultTimeRecords = [];
+
+  for (const row of candidates) {
+    const fullPath = row.physical_path;
+    try {
+      const stat = await fs.stat(fullPath);
+      const isDir = stat.isDirectory();
+      const created = stat.birthtimeMs;
+      const modified = stat.mtimeMs;
+
+      if (type !== 'all') {
+        if (type === 'file' && isDir) continue;
+        if (type === 'dir' && !isDir) continue;
+      }
+
+      if (time?.field === 'created') {
+        if (time.from !== null && time.from !== undefined && created < time.from) continue;
+        if (time.to !== null && time.to !== undefined && created > time.to) continue;
+      }
+      if (time?.field === 'modified') {
+        if (time.from !== null && time.from !== undefined && modified < time.from) continue;
+        if (time.to !== null && time.to !== undefined && modified > time.to) continue;
+      }
+
+      let customTime = row.custom_time;
+      if (!customTime) {
+        customTime = new Date(created).toISOString();
+        defaultTimeRecords.push({
+          physical_path: fullPath,
+          type: row.type || (isDir ? 'dir' : 'file'),
+          custom_time: customTime
+        });
+      }
+
+      if (time?.field === 'custom') {
+        const customMs = customTime ? Date.parse(customTime) : NaN;
+        if (!Number.isFinite(customMs)) continue;
+        if (time.from !== null && time.from !== undefined && customMs < time.from) continue;
+        if (time.to !== null && time.to !== undefined && customMs > time.to) continue;
+      }
+
+      results.push({
+        name: path.basename(fullPath),
+        fullPath,
+        relativePath: toRelative(rootPath, fullPath),
+        isDirectory: isDir,
+        size: stat.size,
+        modified,
+        created,
+        ext: isDir ? '' : path.extname(fullPath).slice(1),
+        type: row.type || (isDir ? 'dir' : 'file'),
+        levelTag: row.level_tag ?? null,
+        customTime
+      });
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        await db.deleteRecords([fullPath]);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (defaultTimeRecords.length) {
+    await db.setCustomTimeIfNull(defaultTimeRecords);
+  }
+
+  return results;
 }
 
 async function buildTimeBuckets(rootPath, db) {
@@ -73,6 +233,14 @@ async function buildTimeBuckets(rootPath, db) {
       try {
         const stat = await fs.stat(row.physical_path);
         time = stat.birthtimeMs;
+        // 写回默认自定义时间，保证后续渲染从数据库读取
+        await db.setCustomTimeIfNull([
+          {
+            physical_path: row.physical_path,
+            type: null,
+            custom_time: new Date(stat.birthtimeMs).toISOString()
+          }
+        ]);
       } catch (err) {
         // 并发删除场景下清理记录并跳过
         if (err && err.code === 'ENOENT') {
@@ -94,6 +262,7 @@ async function buildTimeBuckets(rootPath, db) {
 async function scanRoot(rootPath, db) {
   if (!(await fs.pathExists(rootPath))) return;
   const records = [];
+  const defaultTimeRecords = [];
   async function walk(dir) {
     const names = await fs.readdir(dir);
     for (const name of names) {
@@ -101,9 +270,12 @@ async function scanRoot(rootPath, db) {
       const stat = await fs.stat(fullPath);
       records.push({
         physical_path: fullPath,
+        type: stat.isDirectory() ? 'dir' : 'file'
+      });
+      defaultTimeRecords.push({
+        physical_path: fullPath,
         type: stat.isDirectory() ? 'dir' : 'file',
-        level_tag: null,
-        custom_time: null
+        custom_time: new Date(stat.birthtimeMs).toISOString()
       });
       if (stat.isDirectory()) {
         await walk(fullPath);
@@ -112,7 +284,9 @@ async function scanRoot(rootPath, db) {
   }
 
   await walk(rootPath);
-  await db.upsertFiles(records);
+  // 先更新类型，再补齐默认自定义时间（不覆盖用户设置）
+  await db.upsertFileTypes(records);
+  await db.setCustomTimeIfNull(defaultTimeRecords);
 }
 
 async function createFolder(rootPath, relativePath, name) {
@@ -245,6 +419,7 @@ module.exports = {
   ensureInsideRoot,
   listDirectory,
   buildTimeBuckets,
+  searchEntries,
   createFolder,
   uploadFiles,
   renameEntry,

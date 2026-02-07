@@ -5,6 +5,24 @@ type LevelTag = 'temp' | 'normal' | 'important' | null;
 type ViewMode = 'physical' | 'time';
 type DisplayMode = 'list' | 'thumbnail';
 
+type SearchScope = 'current' | 'recursive';
+type SearchType = 'all' | 'file' | 'dir';
+type SearchTimeField = 'none' | 'modified' | 'created' | 'custom';
+
+interface SearchOptions {
+  keyword: string;
+  useRegex: boolean;
+  scope: SearchScope;
+  type: SearchType;
+  levelTag: LevelTag | 'all' | 'none';
+  exts: string[];
+  time: {
+    field: SearchTimeField;
+    from: number | null;
+    to: number | null;
+  };
+}
+
 interface ClipboardState {
   mode: 'copy' | 'cut';
   rootId: string;
@@ -68,6 +86,7 @@ interface Window {
     removeRoot: (payload: { id: string }) => Promise<ApiResult<string | null>>;
     renameRoot: (payload: { id: string; name: string }) => Promise<ApiResult<RootItem>>;
     list: (payload: { rootId: string; relativePath: string }) => Promise<ApiResult<FileEntry[]>>;
+    search: (payload: { rootId: string; relativePath: string; options: SearchOptions }) => Promise<ApiResult<FileEntry[]>>;
     timeBuckets: (payload: { rootId: string }) => Promise<ApiResult<TimeBucket[]>>;
     createFolder: (payload: { rootId: string; relativePath: string; name: string }) => Promise<ApiResult<string>>;
     createFile: (payload: { rootId: string; relativePath: string; name: string; templatePath?: string; content?: string; data?: string }) => Promise<ApiResult<string>>;

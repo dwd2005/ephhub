@@ -57,7 +57,6 @@ export const useFileOperations = ({
             name: value
           })
         );
-        refresh();
       }
     });
   }, [currentPath, currentRootId, handle, modal, refresh]);
@@ -86,7 +85,6 @@ export const useFileOperations = ({
     if (!state.selected.length) return message.info('请选择文件');
     await handle(window.api.delete({ rootId: state.currentRootId!, targets: state.selected }));
     clearSelection();
-    refresh();
   }, [clearSelection, handle, message, refresh]);
 
   const handleMoveOrCopy = useCallback(
@@ -123,7 +121,6 @@ export const useFileOperations = ({
             );
           }
           clearSelection();
-          refresh();
         }
       });
     },
@@ -174,7 +171,6 @@ export const useFileOperations = ({
           message.success('移动完成');
         }
         clearSelection();
-        refresh();
         return;
       } catch (err) {}
     }
@@ -187,7 +183,6 @@ export const useFileOperations = ({
       );
       message.success('粘贴完成');
       clearSelection();
-      refresh();
     } catch (err) {}
   }, [clearSelection, clipboard, handle, message, refresh, setClipboard]);
 
@@ -235,7 +230,6 @@ export const useFileOperations = ({
     });
     if (!confirmed) return;
     await handle(window.api.deleteByLevel({ rootId: state.currentRootId, levelTag: 'temp' }));
-    refresh();
   }, [handle, modal, refresh]);
 
   const handleCleanTemp = useCallback(
@@ -250,7 +244,6 @@ export const useFileOperations = ({
         })
       );
       message.success('临时内容已清理');
-      refresh();
     },
     [handle, message, refresh]
   );
@@ -370,38 +363,50 @@ export const useFileOperations = ({
     [currentRootId, handle, modal, refresh, setFiles, setRenamingPath, setSelected, viewMode]
   );
 
-  const promptNewFile = useCallback(
-    (options: { ext: string; placeholder: string; templatePath?: string | null; data?: string | null }) => {
-      let inputRef: any = null;
-      modal.confirm({
-        title: `新建${options.placeholder}`,
-        content: (
-          <Input
-            defaultValue={`新建${options.placeholder}${options.ext}`}
-            ref={(ref) => (inputRef = ref)}
-            placeholder="请输入文件名"
-          />
-        ),
-        onOk: async () => {
-          const value = inputRef?.input?.value?.trim();
-          if (!value) return Promise.reject();
-          const finalName = value.endsWith(options.ext) ? value : `${value}${options.ext}`;
-          await handle(
-            window.api.createFile({
-              rootId: currentRootId!,
-              relativePath: currentPath,
-              name: finalName,
-              content: '',
-              templatePath: options.templatePath || undefined,
-              data: options.data || undefined
-            })
-          );
-          refresh();
+  const promptNewFile = useCallback(() => {
+    let inputRef: any = null;
+    modal.confirm({
+      title: '新建文件',
+      content: (
+        <Input
+          ref={(ref) => (inputRef = ref)}
+          placeholder="请输入文件名（必须包含扩展名，例如 example.txt）"
+        />
+      ),
+      onOk: async () => {
+        const value = inputRef?.input?.value?.trim();
+        if (!value) {
+          message.warning('请输入文件名');
+          return Promise.reject();
         }
-      });
-    },
-    [currentPath, currentRootId, handle, modal, refresh]
-  );
+        if (/[\\/]/.test(value)) {
+          message.warning('文件名不能包含路径分隔符');
+          return Promise.reject();
+        }
+        if (/[<>:"|?*]/.test(value)) {
+          message.warning('文件名包含非法字符');
+          return Promise.reject();
+        }
+        if (value.endsWith(' ') || value.endsWith('.')) {
+          message.warning('文件名不能以空格或点结尾');
+          return Promise.reject();
+        }
+        const lastDot = value.lastIndexOf('.');
+        if (lastDot <= 0 || lastDot === value.length - 1) {
+          message.warning('请包含扩展名，例如 example.txt');
+          return Promise.reject();
+        }
+        await handle(
+          window.api.createFile({
+            rootId: currentRootId!,
+            relativePath: currentPath,
+            name: value,
+            content: ''
+          })
+        );
+      }
+    });
+  }, [currentPath, currentRootId, handle, message, modal, refresh]);
 
   return {
     openAddRoot,

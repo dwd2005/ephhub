@@ -7,6 +7,8 @@ class DatabaseManager {
     const dbPath = path.join(app.getPath('userData'), 'metadata.db');
     this.db = new sqlite3.Database(dbPath);
     this.ready = this.init();
+    // 事务串行队列，避免并发 BEGIN 导致嵌套事务错误
+    this.txQueue = Promise.resolve();
   }
 
   async init() {
@@ -37,20 +39,28 @@ class DatabaseManager {
 
   // 事务包装：失败自动回滚
   async runInTransaction(task) {
-    await this.beginTransaction();
-    try {
-      const result = await task();
-      await this.commitTransaction();
-      return result;
-    } catch (err) {
+    await this.ready;
+    const runTask = async () => {
+      await this.beginTransaction();
       try {
-        await this.rollbackTransaction();
-      } catch (rollbackErr) {
-        // 回滚失败也不覆盖原始错误
-        console.warn('DB rollback failed', rollbackErr);
+        const result = await task();
+        await this.commitTransaction();
+        return result;
+      } catch (err) {
+        try {
+          await this.rollbackTransaction();
+        } catch (rollbackErr) {
+          // 回滚失败也不覆盖原始错误
+          console.warn('DB rollback failed', rollbackErr);
+        }
+        throw err;
       }
-      throw err;
-    }
+    };
+
+    const next = this.txQueue.then(runTask, runTask);
+    // 不阻塞后续任务队列
+    this.txQueue = next.catch(() => {});
+    return next;
   }
 
   run(sql, params = []) {
@@ -174,6 +184,32 @@ class DatabaseManager {
     await task();
   }
 
+  // 仅在 custom_time 为空时写入默认时间，避免覆盖用户自定义时间
+  async setCustomTimeIfNull(records) {
+    if (!records.length) return;
+    await this.ready;
+    const sql = `
+      INSERT INTO files(physical_path, type, custom_time)
+      VALUES (?, ?, ?)
+      ON CONFLICT(physical_path) DO UPDATE SET
+        type=COALESCE(excluded.type, files.type),
+        custom_time=CASE
+          WHEN files.custom_time IS NULL OR files.custom_time = '' THEN excluded.custom_time
+          ELSE files.custom_time
+        END
+    `;
+    const task = async () => {
+      for (const row of records) {
+        await this.run(sql, [row.physical_path, row.type || null, row.custom_time]);
+      }
+    };
+    if (records.length > 1) {
+      await this.runInTransaction(task);
+      return;
+    }
+    await task();
+  }
+
   async deleteRecords(paths) {
     await this.ready;
     if (!paths.length) return;
@@ -185,6 +221,14 @@ class DatabaseManager {
     await this.ready;
     return this.all(
       `SELECT physical_path, custom_time FROM files WHERE physical_path LIKE ? ORDER BY custom_time`,
+      [`${rootPath}%`]
+    );
+  }
+
+  async listByRootDetailed(rootPath) {
+    await this.ready;
+    return this.all(
+      `SELECT physical_path, type, level_tag, custom_time FROM files WHERE physical_path LIKE ?`,
       [`${rootPath}%`]
     );
   }

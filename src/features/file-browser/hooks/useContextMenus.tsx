@@ -15,8 +15,6 @@ import {
   TagOutlined
 } from '@ant-design/icons';
 import { useStore } from '@/store/useStore';
-import AppIcon from '../components/AppIcon';
-import type { NewFileType } from '@/types/newFile';
 import { useApiHelpers } from './useApiHelpers';
 
 interface ContextMenuParams {
@@ -30,8 +28,7 @@ interface ContextMenuParams {
   handleSetLevelForPaths: (level: LevelTag, targets: string[]) => void;
   setRenamingPath: (path: string | null) => void;
   handleNewFolder: () => void;
-  promptNewFile: (options: { ext: string; placeholder: string; templatePath?: string | null; data?: string | null }) => void;
-  newFileTypes: NewFileType[];
+  promptNewFile: () => void;
   handleCleanTempRoot: () => Promise<void>;
 }
 
@@ -47,7 +44,6 @@ export const useContextMenus = ({
   setRenamingPath,
   handleNewFolder,
   promptNewFile,
-  newFileTypes,
   handleCleanTempRoot
 }: ContextMenuParams) => {
   const { clearSelection, selectSingle } = useStore();
@@ -141,37 +137,17 @@ export const useContextMenus = ({
           handleNewFolder();
         }
       },
-      ...(newFileTypes.length
-        ? newFileTypes.map((type) => ({
-            key: `new-${type.extension}`,
-            label: type.name || `新建${type.extension}`,
-            icon: <AppIcon path={type.iconPath} size="small" />,
-            onClick: () => {
-              closeContextMenu();
-              promptNewFile({
-                ext: type.extension,
-                placeholder: type.name || type.extension,
-                templatePath: type.templatePath || undefined,
-                data: type.data || undefined
-              });
-            }
-          }))
-        : [
-            {
-              key: 'new-text',
-              label: '文本文件',
-              icon: <FileTextOutlined />,
-              onClick: () => {
-                closeContextMenu();
-                promptNewFile({
-                  ext: '.txt',
-                  placeholder: '文本文件'
-                });
-              }
-            }
-          ])
+      {
+        key: 'new-file',
+        label: '文件',
+        icon: <FileTextOutlined />,
+        onClick: () => {
+          closeContextMenu();
+          promptNewFile();
+        }
+      }
     ],
-    [closeContextMenu, handleNewFolder, newFileTypes, promptNewFile]
+    [closeContextMenu, handleNewFolder, promptNewFile]
   );
 
   const levelMenu = useCallback(
@@ -453,4 +429,3 @@ export const useContextMenus = ({
     setOpenWithExpanded
   };
 };
-

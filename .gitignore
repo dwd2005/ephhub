@@ -30,3 +30,7 @@ Thumbs.db
 # Electron
 electron-builder.yaml
 electron-builder.json
+
+#临时文档
+说明文档.md
+搜索功能实现说明.md

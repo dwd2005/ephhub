@@ -16,6 +16,8 @@ type Props = {
   onFileNameClick: (e: React.MouseEvent, file: FileEntry) => void;
   operationStatus: Record<string, OperationStatus>;
   setRenamingPath: (path: string | null) => void;
+  searchTerm: string;
+  searchRegex: boolean;
 };
 
 const FileGridView: React.FC<Props> = ({
@@ -29,9 +31,58 @@ const FileGridView: React.FC<Props> = ({
   onRenameSubmit,
   onFileNameClick,
   operationStatus,
-  setRenamingPath
+  setRenamingPath,
+  searchTerm,
+  searchRegex
 }) => {
   const safeSelected = Array.isArray(selected) ? selected : [];
+
+  const renderHighlightedName = (name: string) => {
+    const keyword = (searchTerm || '').trim();
+    if (!keyword) return name;
+    try {
+      if (searchRegex) {
+        const re = new RegExp(keyword, 'ig');
+        const parts: React.ReactNode[] = [];
+        let lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(name)) !== null) {
+          const start = match.index;
+          const end = start + match[0].length;
+          if (start > lastIndex) {
+            parts.push(name.slice(lastIndex, start));
+          }
+          parts.push(
+            <mark className="search-hit" key={`${start}-${end}`}>
+              {name.slice(start, end)}
+            </mark>
+          );
+          lastIndex = end;
+          if (match[0].length === 0) break;
+        }
+        if (lastIndex < name.length) {
+          parts.push(name.slice(lastIndex));
+        }
+        return parts.length ? parts : name;
+      }
+      const lower = name.toLowerCase();
+      const target = keyword.toLowerCase();
+      const idx = lower.indexOf(target);
+      if (idx === -1) return name;
+      const before = name.slice(0, idx);
+      const hit = name.slice(idx, idx + target.length);
+      const after = name.slice(idx + target.length);
+      return (
+        <>
+          {before}
+          <mark className="search-hit">{hit}</mark>
+          {after}
+        </>
+      );
+    } catch {
+      return name;
+    }
+  };
 
   return (
     <>
@@ -79,7 +130,7 @@ const FileGridView: React.FC<Props> = ({
                 />
               ) : (
                 <div className="name" onClick={(e) => onFileNameClick(e, file)}>
-                  {file.name}
+                  {renderHighlightedName(file.name)}
                 </div>
               )}
               <div className="meta">

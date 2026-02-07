@@ -1,4 +1,4 @@
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const iconv = require('iconv-lite');
 
 // Execute reg.exe and decode output (prefer CP936, fallback UTF-8)
@@ -27,4 +27,23 @@ function parseDefaultValue(output) {
   return '';
 }
 
-module.exports = { execReg, parseDefaultValue };
+// Execute PowerShell and decode UTF-8 output
+function execPowerShell(script) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-STA', '-Command', script],
+      { windowsHide: true, encoding: 'buffer' },
+      (err, stdout, stderr) => {
+        if (err) return reject(err);
+        try {
+          return resolve(stdout.toString('utf8') || '');
+        } catch (e) {
+          return resolve('');
+        }
+      }
+    );
+  });
+}
+
+module.exports = { execReg, parseDefaultValue, execPowerShell };
